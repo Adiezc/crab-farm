@@ -1,55 +1,55 @@
 export type Farm = {
   /** The main loop is mid-turn. */
   isWorking: boolean
-  /** The current main-loop turn, and the text it started with: a new task is named after it. */
-  turnId: string
+  /** The text the current turn started with: a plan of one step is named after it. */
   turnText: string
-  /** The current task's tool calls when this turn began: a turn that adds to them brings in a crop. */
-  toolsAtTurnStart: number
-  /** Tasks started this session, including any rolled off the kept list; the newest task's number. */
+  /** The main loop has called a tool this turn: the turn brings in a crop. */
+  turnHadTools: boolean
+  /** Tasks started this session (the task list's first_task and new_task). */
   taskCount: number
-  /** Crops harvested across sessions (finished turns and subagents), mirrored from $.store. */
+  /** Crops harvested across sessions (working turns and finished subagents), mirrored from $.store. */
   harvest: number
 }
 
-/** One task of this session: its own Claude on its own plot. */
-export type Task = {
-  id: string
+/** One step of the plan: its own Claude on its own plot. */
+export type Step = {
   name: string
-  startedAt: number
-  /** The turn the task began in. */
-  turnId: string
-  /** Main-loop tool calls made for this task: its crops grow with them. */
+  status: 'pending' | 'in_progress' | 'completed'
+  /** Main-loop tool calls made while this step was in progress: its crops grow with them. */
   tools: number
-  /** working: mid-turn; waiting: its turn ended, waiting for the user; done: a later task took over. */
-  status: 'working' | 'waiting' | 'done'
+}
+
+/** The task list as the farm follows it; a new list replaces it and gets a new `seq`. */
+export type Plan = {
+  seq: number
+  steps: Step[]
 }
 
 export type Critter = {
   id: string
   agentId?: string
-  /** The task that was current when the subagent was spawned: it helps on that plot. */
-  taskId: string
+  /** The plan and step in progress when the subagent was spawned (`<seq>:<index>`): it helps on that plot. */
+  step: string
   label: string
   model: string
   status: 'running' | 'done' | 'failed'
 }
 
-/** A Claude as drawn: one task, or a sleeping placeholder before the first one. */
+/** A Claude as drawn: one step of the plan, or a sleeping placeholder before the first prompt. */
 export type Farmer = {
   id: string
   name: string
-  status: 'working' | 'waiting' | 'done' | 'asleep'
+  /** working: its step is in progress mid-turn; waiting: in progress, the turn over; done; pending: not started; asleep: no plan yet. */
+  status: 'working' | 'waiting' | 'done' | 'pending' | 'asleep'
   tools: number
-  startedAt: number
-  /** Its running subagents: the little helpers on its plot. */
+  /** Its running subagents: the mini Claudes on its plot. */
   helpers: { label: string; model: string }[]
-  /** The newest task, named in yellow. */
+  /** The step in progress, its sign in gold. */
   isCurrent?: boolean
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'crab-farm': { farm: Farm; tasks: Task[]; critters: Critter[] }
+    'crab-farm': { farm: Farm; plan: Plan; critters: Critter[] }
   }
 }

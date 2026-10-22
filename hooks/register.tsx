@@ -1,32 +1,32 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Critter, Farm, Farmer, Task } from '../types'
+import type { Critter, Farm, Farmer, Plan, Step } from '../types'
 import { BG, FG, ICONS, LAYOUT, SPRITES, WORLD } from './art'
 
 // A purely visual farm in clodfarm's look: it only listens to what Claude already does and draws it.
 // No model calls, no tools for the model, so it costs nothing to run.
-// Every task of this session is a Claude with its own plot; the subagents spawned for it are the little helpers on it.
-// A task starts where the app's task list says one does (scope first_task or new_task); a continuation stays with the current Claude.
+// Every step of the plan Claude is working through is a Claude with its own plot, up to six at a time;
+// the subagents spawned during a step are the mini Claudes on its plot. The plan is the app's task list,
+// followed call by call; a turn without one is a plan of a single step, named after the prompt.
 // Light by design: state is written only when the drawing would change, and only the busy Claude animates.
 
 const PANE = 'crab-farm'
 const TITLE = 'Crab Farm'
 const MAX_CRITTERS = 24
-const MAX_TASKS_KEPT = 24
+const MAX_STEPS = 12
 const MAX_HELPERS_SHOWN = 3
 // How wide a sign's words may run, in world pixels: from the plot's edge to the next Claude's bubble.
 const SIGN_TEXT_W = 33
 
 const farm = atom({ plugin: 'crab-farm', key: 'farm' } as const, {
   isWorking: false,
-  turnId: '',
   turnText: '',
-  toolsAtTurnStart: 0,
+  turnHadTools: false,
   taskCount: 0,
   harvest: 0,
 } as Farm)
-const tasks = atom({ plugin: 'crab-farm', key: 'tasks' } as const, [] as Task[])
+const plan = atom({ plugin: 'crab-farm', key: 'plan' } as const, { seq: 0, steps: [] } as Plan)
 const critters = atom({ plugin: 'crab-farm', key: 'critters' } as const, [] as Critter[])
 
 // --- drawing ------------------------------------------------------------
@@ -104,7 +104,7 @@ const pixelText = (x: number, y: number, text: string, fill: string, shade?: str
 }
 
 // Crops: two staggered rows of three, as clodfarm's drawCrops lays them out.
-const crops = (p: Plot, stage: Stage, seed: number, glow: boolean): string => {
+const crops = (p: Plot, stage: Stage, seed: number): string => {
   if (stage === 'none') return ''
   const out: string[] = []
   for (let row = 0; row < 2; row++)
@@ -112,7 +112,7 @@ const crops = (p: Plot, stage: Stage, seed: number, glow: boolean): string => {
       const x = p.x + 6 + k * 9 + row * 4
       const y = row ? p.y + p.h - 1 : p.y + 8
       const sway = stage === 'grow' || stage === 'ripe' ? `crop_${stage}_${(k + row + seed) % 3}` : `crop_${stage}_1`
-      out.push(img(sway, x - 2.5, y - 9, 5, 9, glow ? 'glow' : ''))
+      out.push(img(sway, x - 2.5, y - 9, 5, 9))
     }
   return out.join('')
 }
@@ -131,7 +131,7 @@ const bubble = (cx: number, bottom: number, icon: string, alert = false): string
     '</g>'
 }
 
-// A wooden plank under a plot naming its task; the current task's is gold.
+// A wooden plank under a plot naming its step; the step in progress has a gold one.
 const sign = (x: number, y: number, text: string, isCurrent: boolean): string => {
   const w = textWidth(text) + 5
   const h = 8
@@ -143,9 +143,9 @@ const sign = (x: number, y: number, text: string, isCurrent: boolean): string =>
 }
 
 // The farm's notice board, hung from the trees in the top-right corner: a lamp lit while Claude works, and the counts.
-const board = (working: boolean, rows: [string, number][]): string => {
+const board = (working: boolean, rows: [string, string][]): string => {
   const title = 'CRAB FARM'
-  const bw = Math.max(textWidth(title) + 7, ...rows.map(([l, n]) => textWidth(l) + 4 + textWidth(String(n)))) + 8
+  const bw = Math.max(textWidth(title) + 7, ...rows.map(([l, n]) => textWidth(l) + 4 + textWidth(n))) + 8
   const bh = 9 + rows.length * 7 + 2
   const x = WORLD.W - 6 - bw
   const y = 5
@@ -165,7 +165,7 @@ const board = (working: boolean, rows: [string, number][]): string => {
   rows.forEach(([label, n], i) => {
     const ty = y + 11 + i * 7
     parts.push(pixelText(x + 3, ty, label, WOOD.cream, WOOD.edge))
-    parts.push(pixelText(x + bw - 3 - textWidth(String(n)), ty, String(n), '#fff4d6', WOOD.edge))
+    parts.push(pixelText(x + bw - 3 - textWidth(n), ty, n, '#fff4d6', WOOD.edge))
   })
   return parts.join('')
 }
@@ -180,38 +180,46 @@ image{image-rendering:pixelated}
 .fa{animation:fa .9s steps(1) infinite}.fb{opacity:0;animation:fb .9s steps(1) infinite}
 @keyframes fa{50%{opacity:0}}@keyframes fb{50%{opacity:1}}
 .bub{animation:bob 2.2s steps(2) infinite}@keyframes bob{50%{transform:translateY(-2px)}}
-.glow{animation:glow 2.6s ease-in-out infinite}@keyframes glow{50%{opacity:.82}}
 .ff{animation:ff 3.2s ease-in-out infinite;opacity:0}@keyframes ff{40%,60%{opacity:1}}
 @media (prefers-reduced-motion: reduce){*{animation:none!important}.fb{opacity:0}.ff{opacity:.7}}
 </style>`
 
-// A task's crops grow with its tool calls and bloom once its turn has ended.
+// A step's crops grow with the tool calls made for it and ripen once it's done.
 const plotStage = (f: Farmer): Stage => {
-  if (f.status === 'asleep' || f.tools === 0) return 'none'
-  if (f.status !== 'working') return 'ripe'
+  if (f.status === 'done') return 'ripe'
+  if (f.status === 'pending' || f.status === 'asleep' || f.tools === 0) return 'none'
   return f.tools < 3 ? 'seed' : f.tools < 8 ? 'sprout' : 'grow'
 }
 
-// The session's tasks as Claudes, each with the running subagents spawned for it; the newest is current.
-const asFarmers = (list: Task[], crit: Critter[]): Farmer[] =>
-  list.map((t, i) => ({
-    id: t.id,
-    name: t.name,
-    status: t.status,
-    tools: t.tools,
-    startedAt: t.startedAt,
-    helpers: crit.filter(c => c.taskId === t.id && c.status === 'running').map(c => ({ label: c.label, model: c.model })),
-    isCurrent: i === list.length - 1,
+const stepKey = (seq: number, i: number): string => `${seq}:${i}`
+
+// The plan's steps as Claudes, each with the running subagents spawned while it was in progress.
+const asFarmers = (p: Plan, crit: Critter[], isWorking: boolean): Farmer[] => {
+  const current = p.steps.findIndex(s => s.status === 'in_progress')
+  return p.steps.map((s, i) => ({
+    id: stepKey(p.seq, i),
+    name: s.name,
+    status: s.status === 'completed' ? 'done' : s.status === 'pending' ? 'pending' : isWorking ? 'working' : 'waiting',
+    tools: s.tools,
+    helpers: crit.filter(c => c.step === stepKey(p.seq, i) && c.status === 'running').map(c => ({ label: c.label, model: c.model })),
+    isCurrent: i === current,
   }))
+}
 
-// Who gets the plots: the newest tasks, seated in the order they started.
-const seat = (all: Farmer[], plots: number): Farmer[] =>
-  [...all].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id)).slice(-plots)
+// Which steps get the plots: all of a short plan; of a longer one, six in a row that keep the step in progress in view.
+const seat = (all: Farmer[], plots: number): Farmer[] => {
+  if (all.length <= plots) return all
+  const current = all.findIndex(f => f.isCurrent)
+  const next = all.findIndex(f => f.status === 'pending')
+  const anchor = current >= 0 ? current : next >= 0 ? next : all.length - 1
+  const start = Math.min(Math.max(0, anchor - 2), all.length - plots)
+  return all.slice(start, start + plots)
+}
 
-// Words a sign skips, so it keeps the ones that say what the task is.
+// Words a sign skips, so it keeps the ones that say what the step is.
 const FILLER = new Set('a an and the to of on in for with it its is be me my we us you i so now ok okay just please can could would will lets let let\'s hey hi want need like make this that'.split(' '))
 
-// A task's name as its sign spells it: whole words that fit, filler left out unless nothing else is left.
+// A step's name as its sign spells it: whole words that fit, filler left out unless nothing else is left.
 const signName = (name: string, max = SIGN_TEXT_W): string => {
   const words = fontText(name).split(/\s+/).filter(Boolean)
   const kept = words.filter(w => !FILLER.has(w.toLowerCase()))
@@ -225,17 +233,18 @@ const signName = (name: string, max = SIGN_TEXT_W): string => {
   return out || (pick[0] ?? '').slice(0, Math.floor((max + 1) / 4))
 }
 
-const IDLE: Farmer = { id: 'idle', name: 'claude', status: 'asleep', tools: 0, startedAt: 0, helpers: [] }
+const IDLE: Farmer = { id: 'idle', name: 'claude', status: 'asleep', tools: 0, helpers: [] }
 
-const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = farmers.length, hour = 12): string => {
+const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = 1, hour = 12): string => {
   const world: string[] = [`<image href="${BG}" x="0" y="0" width="${VW}" height="${VH}"/>`]
   const ui: string[] = []
   const plots = LAYOUT.plots as readonly Plot[]
   const shown = farmers.length ? seat(farmers, plots.length) : [IDLE]
 
-  shown.forEach((f, i) => world.push(crops(plots[i] as Plot, plotStage(f), i, f.status === 'waiting')))
+  shown.forEach((f, i) => world.push(crops(plots[i] as Plot, plotStage(f), i)))
 
-  // Each Claude stands at the left of its plot: typing at a laptop, waiting for its person, resting after its task, or asleep before the first.
+  // Each Claude stands at the left of its plot: typing at a laptop, waiting for its person,
+  // dozing by the harvest of a finished step, standing by for its turn, or asleep before the first prompt.
   shown.forEach((f, i) => {
     const p = plots[i] as Plot
     const x = p.x - 15
@@ -249,14 +258,16 @@ const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = farmers.length
       // Standing still: only the bubble bobs, so a waiting Claude never flickers.
       world.push(img('claude_stand', x, y, 16, 18))
       ui.push(bubble(x + 8, y - 1, 'ask', true))
+    } else if (f.status === 'pending') {
+      // Still images from here on, which cost the pane nothing to keep drawn.
+      world.push(img('claude_stand', x, y, 16, 18))
     } else {
-      // Finished or not yet started: a still, sleeping Claude, which costs the pane nothing to keep drawn.
       world.push(img('claude_sleep', x, y, 16, 18))
       if (f.status === 'asleep') ui.push(bubble(x + 8, y + 3, 'zzz'))
     }
   })
 
-  // Its subagents: little helpers along the top of its plot, each in its model's colour.
+  // The step's subagents: mini Claudes working along the top of its plot, each in its model's colour.
   shown.forEach((f, i) => {
     const p = plots[i] as Plot
     f.helpers.slice(0, MAX_HELPERS_SHOWN).forEach((h, k) => {
@@ -269,7 +280,7 @@ const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = farmers.length
     if (extra > 0) ui.push(pixelText(p.x + 3 + MAX_HELPERS_SHOWN * 9 + 1, p.y - 6, `+${extra}`, '#fff4d6', INK))
   })
 
-  // Under each plot, a sign with its task's name, starting past the plot's edge to clear the bubble of the Claude below.
+  // Under each plot, a sign with its step's name, starting past the plot's edge to clear the bubble of the Claude below.
   shown.forEach((f, i) => {
     const p = plots[i] as Plot
     ui.push(sign(p.x, p.y + p.h + 2, signName(f.name || 'claude'), f.isCurrent ?? false))
@@ -287,13 +298,19 @@ const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = farmers.length
   world.push(`<rect width="${VW}" height="${VH}" fill="url(#vig)"/>`)
 
   const helpers = farmers.reduce((n, f) => n + f.helpers.length, 0)
-  ui.push(board(farmers.some(f => f.status === 'working'), [['TASKS', taskCount], ['HELPERS', helpers], ['HARVEST', harvest]]))
+  const done = farmers.filter(f => f.status === 'done').length
+  ui.push(board(farmers.some(f => f.status === 'working'), [
+    ['TASKS', String(taskCount)],
+    ['STEPS', `${done}/${farmers.length}`],
+    ['HELPERS', String(helpers)],
+    ['HARVEST', String(harvest)],
+  ]))
 
   const defs = '<defs><radialGradient id="vig" cx="50%" cy="52%" r="70%"><stop offset="62%" stop-color="#0c140a" stop-opacity="0"/><stop offset="100%" stop-color="#0c140a" stop-opacity=".38"/></radialGradient></defs>'
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${VW}" height="${VH}" viewBox="0 0 ${VW} ${VH}">${CSS}${defs}${world.join('')}<g shape-rendering="crispEdges">${ui.join('')}</g></svg>`
 }
 
-// A task is named after the first words of the prompt that started it; its sign picks from these.
+// A plan of one step is named after the first words of the prompt; its sign picks from these.
 const taskName = (text: string, n: number): string =>
   text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, ' ')
@@ -304,25 +321,54 @@ const taskName = (text: string, n: number): string =>
     .slice(0, 8)
     .join(' ') || `task ${n}`
 
-export { asFarmers, sceneSvg, seat, signName, taskName, VW, VH }
+// --- following the task list ------------------------------------------------
 
-// --- wiring ---------------------------------------------------------------
+// What the app's task list tool takes: a whole plan, or a move along the one there is.
+type PlanArgs = { items?: unknown; advance?: unknown; done?: unknown; start?: unknown; scope?: unknown }
 
-// The app's task list marks a request's place in the session: these two start a task of their own.
-const isTaskStart = (tool: string, scope: unknown): boolean =>
-  tool.includes('ccd_turn') && tool.endsWith('__update_plan') && (scope === 'first_task' || scope === 'new_task')
+const isPlanTool = (tool: string): boolean => tool.includes('ccd_turn') && tool.endsWith('__update_plan')
+const isWrapTool = (tool: string): boolean => tool.includes('ccd_turn') && tool.endsWith('__wrap_up')
 
-// A new Claude for a new task; the ones before it are done.
-async function startTask($: EngineInterface): Promise<void> {
-  const f = await update($, farm, g => ({ ...g, taskCount: g.taskCount + 1, toolsAtTurnStart: 0 }))
-  const n = f.taskCount
-  const task: Task = { id: `t${n}`, name: taskName(f.turnText, n), startedAt: n, turnId: f.turnId, tools: 0, status: f.isWorking ? 'working' : 'waiting' }
-  await update($, tasks, list => [...list.map((t): Task => ({ ...t, status: 'done' })), task].slice(-MAX_TASKS_KEPT))
+const asStatus = (s: unknown): Step['status'] => (s === 'completed' || s === 'in_progress' ? s : 'pending')
+
+// The task list's call applied the way the app applies it: a new list replaces the plan; a move changes one or two steps.
+const applyPlan = (p: Plan, a: PlanArgs): Plan => {
+  if (Array.isArray(a.items))
+    return {
+      seq: p.seq + 1,
+      steps: a.items.slice(0, MAX_STEPS).map((it: { content?: unknown; status?: unknown } | null): Step => ({
+        name: typeof it?.content === 'string' ? it.content : 'step',
+        status: asStatus(it?.status),
+        tools: 0,
+      })),
+    }
+  const steps = p.steps.map(s => ({ ...s }))
+  const at = (n: unknown): Step | undefined => (typeof n === 'number' ? steps[n - 1] : undefined)
+  if (a.advance === true) {
+    const current = steps.find(s => s.status === 'in_progress')
+    if (current) current.status = 'completed'
+    const next = steps.find(s => s.status === 'pending')
+    if (next) next.status = 'in_progress'
+  }
+  if (Array.isArray(a.done)) a.done.forEach(n => { const s = at(n); if (s) s.status = 'completed' })
+  const started = at(a.start)
+  if (started) {
+    // One step in progress at a time, as the list keeps it.
+    steps.forEach(s => { if (s.status === 'in_progress') s.status = 'pending' })
+    started.status = 'in_progress'
+  }
+  return { ...p, steps }
 }
 
-// Changes only the newest task.
-const updateCurrent = ($: EngineInterface, fn: (t: Task) => Task) =>
-  update($, tasks, list => list.map((t, i) => (i === list.length - 1 ? fn(t) : t)))
+// A tool call of the main loop counts toward the step in progress.
+const countCall = (p: Plan): Plan => {
+  const i = p.steps.findIndex(s => s.status === 'in_progress')
+  return i < 0 ? p : { ...p, steps: p.steps.map((s, k) => (k === i ? { ...s, tools: s.tools + 1 } : s)) }
+}
+
+export { applyPlan, asFarmers, sceneSvg, seat, signName, taskName, VW, VH }
+
+// --- wiring ---------------------------------------------------------------
 
 async function togglePane($: EngineInterface): Promise<boolean> {
   const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
@@ -334,7 +380,7 @@ async function togglePane($: EngineInterface): Promise<boolean> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await $.command.register({ name: 'farm', description: 'Show or hide Crab Farm, a pixel farm of this session\'s tasks and their helpers' })
+    await $.command.register({ name: 'farm', description: 'Show or hide Crab Farm, a pixel farm of the steps Claude is working on and their helpers' })
     const harvest = Number((await $.store.get('harvest')) ?? 0)
     await update($, farm, f => ({ ...f, harvest }))
     // Opens with every session; closing it (its X or /farm) lasts for this session only.
@@ -350,11 +396,10 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
-      const current = (await read($, tasks)).at(-1)
-      await update($, farm, g => ({ ...g, isWorking: true, turnId: e.turnId, turnText: e.text, toolsAtTurnStart: current?.tools ?? 0 }))
-      // The first prompt always gets a Claude; after that, the task list decides.
-      if (!current) await startTask($)
-      else await updateCurrent($, t => ({ ...t, status: 'working' }))
+      const f = await update($, farm, g => ({ ...g, isWorking: true, turnText: e.text, turnHadTools: false }))
+      // Before any task list, the first prompt is a plan of one step.
+      if ((await read($, plan)).steps.length === 0)
+        await update($, plan, (p): Plan => ({ seq: p.seq + 1, steps: [{ name: taskName(f.turnText, 1), status: 'in_progress', tools: 0 }] }))
     }
     return next(e)
   })
@@ -363,10 +408,8 @@ export const register: Register = on => {
     const agentId = e.agentId
     if (agentId === undefined) {
       // A turn that did some work is a crop brought in.
-      const did = ((await read($, tasks)).at(-1)?.tools ?? 0) > (await read($, farm)).toolsAtTurnStart
-      const f = await update($, farm, g => ({ ...g, isWorking: false, harvest: g.harvest + (did ? 1 : 0) }))
-      if (did) await $.store.set('harvest', f.harvest)
-      await updateCurrent($, t => ({ ...t, status: 'waiting' }))
+      const f = await update($, farm, g => ({ ...g, isWorking: false, turnHadTools: false, harvest: g.harvest + (g.turnHadTools ? 1 : 0) }))
+      await $.store.set('harvest', f.harvest)
       return next(e)
     }
     const isDone = e.reason === 'answer'
@@ -385,18 +428,20 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Only the main loop's calls touch state: a subagent's would redraw the pane for nothing it shows.
+  // Only the main loop's calls touch state, one write a call: a subagent's would redraw the pane for nothing it shows.
   // The farm never stands in a tool's way: whatever goes wrong here, the call goes on.
   on('tool.call', async ($, e, next) => {
     if (e.agentId) return next(e)
     try {
-      if (isTaskStart(e.tool, (e as unknown as { scope?: unknown }).scope)) {
-        const f = await read($, farm)
-        const current = (await read($, tasks)).at(-1)
-        // A task already started this turn (the session's first prompt) is the one the list means.
-        if (current?.turnId !== f.turnId) await startTask($)
-      }
-      await updateCurrent($, t => ({ ...t, tools: t.tools + 1 }))
+      const args = e as unknown as PlanArgs
+      const isPlan = isPlanTool(e.tool)
+      const isWrap = isWrapTool(e.tool)
+      await update($, plan, p =>
+        countCall(isPlan ? applyPlan(p, args) : isWrap ? { ...p, steps: p.steps.map(s => ({ ...s, status: 'completed' as const })) } : p),
+      )
+      const isNewTask = isPlan && (args.scope === 'first_task' || args.scope === 'new_task')
+      if (isNewTask || !(await read($, farm)).turnHadTools)
+        await update($, farm, f => ({ ...f, turnHadTools: true, taskCount: f.taskCount + (isNewTask ? 1 : 0) }))
     } catch {
       // A missed count costs a sprout, never the call.
     }
@@ -406,16 +451,21 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
     if (started.deny !== undefined) return started
-    const current = await read($, tasks).catch(() => [] as Task[])
-    const critter: Critter = {
-      id: started.agentId ?? e.tool_use_id,
-      agentId: started.agentId,
-      taskId: current.at(-1)?.id ?? '',
-      label: e.description,
-      model: started.model ?? '',
-      status: 'running',
+    try {
+      const p = await read($, plan)
+      const i = p.steps.findIndex(s => s.status === 'in_progress')
+      const critter: Critter = {
+        id: started.agentId ?? e.tool_use_id,
+        agentId: started.agentId,
+        step: stepKey(p.seq, i >= 0 ? i : Math.max(0, p.steps.length - 1)),
+        label: e.description,
+        model: started.model ?? '',
+        status: 'running',
+      }
+      await update($, critters, list => [...list.filter(c => c.id !== critter.id), critter].slice(-MAX_CRITTERS))
+    } catch {
+      // A helper not drawn, the subagent still runs.
     }
-    await update($, critters, list => [...list.filter(c => c.id !== critter.id), critter].slice(-MAX_CRITTERS)).catch(() => undefined)
     return started
   })
 
@@ -423,14 +473,15 @@ export const register: Register = on => {
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
     const f = await read($, farm)
-    const farmers = asFarmers(await read($, tasks), await read($, critters))
+    const farmers = asFarmers(await read($, plan), await read($, critters), f.isWorking)
+    const done = farmers.filter(x => x.status === 'done').length
 
     if (e.surface !== 'terminal' && 'Svg' in ui) {
       const { Svg } = ui
       const W = Math.max(260, Math.min(720, (e.props.bodyColumns || 40) * 8 - 8))
-      const current = farmers.at(-1)
+      const current = farmers.find(x => x.isCurrent)
       const hour = new Date().getHours()
-      const alt = `Crab Farm: ${f.taskCount} tasks${current ? `, now ${current.name}, ${current.status}` : ''}, ${f.harvest} harvested`
+      const alt = `Crab Farm: ${done} of ${farmers.length} steps done${current ? `, now ${current.name}, ${current.status}` : ''}, ${f.harvest} harvested`
       return (
         <Box flexDirection="column">
           <Svg source={sceneSvg(farmers, f.harvest, f.taskCount, hour)} alt={alt} width={W} height={Math.round((W * VH) / VW)} />
@@ -439,12 +490,12 @@ export const register: Register = on => {
     }
 
     // The terminal has no pictures: the same farm in a few lines.
-    const word = { working: 'working', waiting: 'waiting for you', done: 'done', asleep: 'asleep' } as const
-    const icon = { working: '🌱', waiting: '🌸', done: '🧺', asleep: '💤' } as const
+    const word = { working: 'working', waiting: 'waiting for you', done: 'done', pending: 'next', asleep: 'asleep' } as const
+    const icon = { working: '🌱', waiting: '🌸', done: '🧺', pending: '🟫', asleep: '💤' } as const
     return (
       <Box flexDirection="column">
-        <Text>🦀 Crab Farm · {f.taskCount} tasks · 🌸 {f.harvest}</Text>
-        {(farmers.length ? farmers.slice(-LAYOUT.plots.length) : [IDLE]).map(x => (
+        <Text>🦀 Crab Farm · {done}/{farmers.length} steps · 🌸 {f.harvest}</Text>
+        {(farmers.length ? seat(farmers, LAYOUT.plots.length) : [IDLE]).map(x => (
           <Text key={x.id} dimColor={x.status !== 'working'}>
             {icon[x.status]} {clip(x.name || 'Claude', 30)} · {word[x.status]}
             {x.helpers.length ? ` · ${x.helpers.length} helpers` : ''}
