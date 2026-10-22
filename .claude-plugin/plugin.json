@@ -1,0 +1,20 @@
+{
+  "name": "crab-farm",
+  "version": "1.0.0",
+  "author": {
+    "name": "Adrian Diez Cuadrado",
+    "url": "https://github.com/Adiezc"
+  },
+  "description": "A tiny pixel farm in a side pane of Claude Code: each task gets its own Claude on its own plot, and its subagents are the little helpers on it. Purely visual, no model calls, no usage.",
+  "types": "./types/index.d.ts",
+  "homepage": "https://github.com/Adiezc/crab-farm",
+  "repository": "https://github.com/Adiezc/crab-farm",
+  "license": "MIT",
+  "keywords": [
+    "pane",
+    "sidebar",
+    "pixel-art",
+    "fun",
+    "claude-code-mod"
+  ]
+}

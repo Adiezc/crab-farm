@@ -1,0 +1,17 @@
+{
+  "name": "crab-farm",
+  "owner": {
+    "name": "Adrian Diez Cuadrado",
+    "url": "https://github.com/Adiezc"
+  },
+  "metadata": {
+    "description": "Crab Farm: a tiny pixel farm side pane for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "crab-farm",
+      "source": "./",
+      "description": "A tiny pixel farm in a side pane: each task gets its own Claude, subagents are the helpers. No usage."
+    }
+  ]
+}
