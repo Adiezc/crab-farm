@@ -4,7 +4,7 @@ A tiny pixel farm that lives in a side pane of Claude Code and keeps you company
 
 ![Crab Farm by day and by night](docs/preview.png)
 
-Every step Claude works through gets its own little crab-Claude on its own plot, up to six at a time. Subagents spawned during a step are mini Claudes working on that plot. Crops grow while a step is worked on and ripen when it's done, and the farm follows your clock from dawn to night (with fireflies).
+Every step Claude works through gets its own little crab-Claude on its own plot, up to six at a time. Subagents spawned during a step are mini Claudes working on that plot. Crops grow while a step is worked on and ripen when it's done, and the farm follows your clock from dawn to night (with fireflies, and the barn lit after dark).
 
 It's purely visual. It never calls a model and adds no tools, so it costs no usage.
 
@@ -31,8 +31,13 @@ In the Claude desktop app: click **+** next to the prompt box, then **Plugins**,
 - The pane opens with each session. `/farm` hides it or brings it back.
 - **One Claude per step.** The farm follows Claude's task list, the steps the desktop app shows under each message. A plan of eight shows six plots at a time, keeping the step in progress in view. A turn with no plan is one step, named after your prompt.
 - **Helpers.** Each running subagent is a mini Claude on the plot of the step that was in progress when it was spawned, coloured by model (Haiku, Sonnet, Opus, Fable). Up to three show per plot, then `+N`.
-- **States.** Typing at a laptop: the step in progress. A `?` bubble: waiting for you. Dozing by ripe crops: a finished step. Standing by an empty plot: next up.
-- **The board** counts tasks, steps done, helpers and your harvest (kept across sessions). Its lamp is green while Claude works.
+- **States.**
+  - Typing at a laptop: the step in progress. Three dots by a dark laptop: thinking before its first tool call.
+  - A red `!` bubble: a permission prompt or a question is waiting on you. A `?` bubble: the turn is over and it's your move.
+  - Eyes shut by a dark laptop, crops dried to straw: the turn was stopped or failed. They recover when work resumes.
+  - Beaming with a heart: the step just finished. Dozing by ripe crops: an earlier finished step. Standing by an empty plot: next up.
+- **Crops** grow with each tool call and, as in clodfarm, with time: a sprout after two minutes, fully grown after fifteen.
+- **The board** counts tasks, steps done, helpers and your harvest (kept across sessions). Its lamp is green while Claude works. Hay bales stack up by the barn at 5, 15 and 30 harvested.
 - In a plain terminal, where panes can't draw pictures, the same farm shows as a few lines of text.
 
 ## Light by design
