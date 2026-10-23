@@ -111,8 +111,10 @@ const crops = (p: Plot, stage: Stage, seed: number): string => {
     for (let k = 0; k < 3; k++) {
       const x = p.x + 6 + k * 9 + row * 4
       const y = row ? p.y + p.h - 1 : p.y + 8
-      const sway = stage === 'grow' || stage === 'ripe' ? `crop_${stage}_${(k + row + seed) % 3}` : `crop_${stage}_1`
-      out.push(img(sway, x - 2.5, y - 9, 5, 9))
+      // Wilted crops are the grown ones dried to straw: clodfarm's own wilt stems vanish on the dark soil.
+      const key = stage === 'wilt' ? 'grow' : stage
+      const sway = key === 'grow' || key === 'ripe' ? `crop_${key}_${(k + row + seed) % 3}` : `crop_${key}_1`
+      out.push(stage === 'wilt' ? `<g filter="url(#dry)">${img(sway, x - 2.5, y - 8, 5, 9)}</g>` : img(sway, x - 2.5, y - 9, 5, 9))
     }
   return out.join('')
 }
@@ -175,6 +177,30 @@ const skyAt = (hour: number): Sky => (hour < 5 || hour >= 21 ? 'night' : hour < 
 const WASH: Record<Sky, string> = { day: '', dawn: 'rgba(255,179,138,.12)', dusk: 'rgba(255,138,61,.16)', night: 'rgba(20,28,70,.46)' }
 const FIREFLIES = [[38, 96], [150, 100], [96, 128], [44, 166], [152, 170], [100, 206], [70, 84], [138, 74]] as const
 
+// The harvest stacks up by the barn: a bale at 5, 15 and 30 crops brought in, kept across sessions.
+const BALE_AT = [5, 15, 30] as const
+const BALE_SPOTS = [[93, 69], [101, 69], [97, 63]] as const
+const bale = (x: number, y: number): string =>
+  shadow(x + 4, y + 6, 5) +
+  box(x, y + 0.5, 8, 5.5, '#8a5a1e') + box(x + 0.5, y, 7, 6, '#8a5a1e') +
+  box(x + 0.5, y + 0.5, 7, 5, '#e8b85c') + box(x + 0.5, y + 0.5, 7, 1, '#f6d58c') +
+  box(x + 2.5, y + 0.5, 0.5, 5, '#c48a2e') + box(x + 5, y + 0.5, 0.5, 5, '#c48a2e') +
+  box(x + 1, y - 0.5, 0.5, 1, '#f6d58c') + box(x + 4, y - 0.5, 0.5, 1, '#f6d58c') + box(x + 6.5, y - 0.5, 0.5, 1, '#e8b85c')
+const bales = (harvest: number): string =>
+  BALE_AT.filter(n => harvest >= n).map((_, k) => { const [x, y] = BALE_SPOTS[k] ?? [0, 0]; return bale(x, y) }).join('')
+
+// After dark the barn's loft window and its lantern are lit.
+const BARN_PANES = [[52.5, 37, 3, 6], [56.5, 37, 3.5, 6]] as const
+const barnLights = (isNight: boolean): string => {
+  const a = isNight ? 1 : 0.6
+  return `<g opacity="${a}">` +
+    `<circle cx="${56.25 * HD}" cy="${40 * HD}" r="${6 * HD}" fill="#ffc861" opacity=".1"/>` +
+    `<circle cx="${68 * HD}" cy="${51.5 * HD}" r="${3.5 * HD}" fill="#ffc861" opacity=".18"/>` +
+    BARN_PANES.map(([x, y, w, h]) => box(x, y, w, h, '#ffd77a', ' opacity=".75"')).join('') +
+    box(67, 50.25, 2, 2.5, '#fff1b8') +
+    '</g>'
+}
+
 const CSS = `<style>
 image{image-rendering:pixelated}
 .fa{animation:fa .9s steps(1) infinite}.fb{opacity:0;animation:fb .9s steps(1) infinite}
@@ -184,25 +210,42 @@ image{image-rendering:pixelated}
 @media (prefers-reduced-motion: reduce){*{animation:none!important}.fb{opacity:0}.ff{opacity:.7}}
 </style>`
 
-// A step's crops grow with the tool calls made for it and ripen once it's done.
+// A step's crops grow with the tool calls made for it and, as clodfarm's do, with time: a sprout after two minutes,
+// grown after fifteen. They ripen once it's done and wilt when its turn was stopped or failed.
+const GROWTH: Stage[] = ['none', 'seed', 'sprout', 'grow']
 const plotStage = (f: Farmer): Stage => {
   if (f.status === 'done') return 'ripe'
-  if (f.status === 'pending' || f.status === 'asleep' || f.tools === 0) return 'none'
-  return f.tools < 3 ? 'seed' : f.tools < 8 ? 'sprout' : 'grow'
+  if (f.status === 'pending' || f.status === 'asleep') return 'none'
+  const minutes = f.minutes ?? 0
+  const byTools = f.tools === 0 ? 0 : f.tools < 3 ? 1 : f.tools < 8 ? 2 : 3
+  const byTime = minutes < 2 ? 0 : minutes < 15 ? 2 : 3
+  const stage = GROWTH[Math.max(byTools, byTime)] ?? 'none'
+  return f.status === 'stopped' && stage !== 'none' ? 'wilt' : stage
 }
 
 const stepKey = (seq: number, i: number): string => `${seq}:${i}`
 
+// What the farm knows beyond the plan: whether a call waits on the person, whether the last turn stopped, the time.
+type Moment = { isAsking?: boolean; isStopped?: boolean; now?: number }
+
 // The plan's steps as Claudes, each with the running subagents spawned while it was in progress.
-const asFarmers = (p: Plan, crit: Critter[], isWorking: boolean): Farmer[] => {
+const asFarmers = (p: Plan, crit: Critter[], isWorking: boolean, m: Moment = {}): Farmer[] => {
   const current = p.steps.findIndex(s => s.status === 'in_progress')
+  // The step finished last celebrates; of a plan finished at once, its last step.
+  let fresh = -1
+  p.steps.forEach((s, i) => {
+    if (s.status === 'completed' && s.doneAt !== undefined && (fresh < 0 || s.doneAt >= (p.steps[fresh]?.doneAt ?? 0))) fresh = i
+  })
+  const inProgress = isWorking ? (m.isAsking ? 'asking' : 'working') : m.isStopped ? 'stopped' : 'waiting'
   return p.steps.map((s, i) => ({
     id: stepKey(p.seq, i),
     name: s.name,
-    status: s.status === 'completed' ? 'done' : s.status === 'pending' ? 'pending' : isWorking ? 'working' : 'waiting',
+    status: s.status === 'completed' ? 'done' : s.status === 'pending' ? 'pending' : inProgress,
     tools: s.tools,
+    minutes: s.status === 'in_progress' && s.startedAt !== undefined && m.now ? Math.max(0, (m.now - s.startedAt) / 60000) : 0,
     helpers: crit.filter(c => c.step === stepKey(p.seq, i) && c.status === 'running').map(c => ({ label: c.label, model: c.model })),
     isCurrent: i === current,
+    isFresh: i === fresh,
   }))
 }
 
@@ -250,17 +293,36 @@ const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = 1, hour = 12):
     const x = p.x - 15
     const y = p.y - 6
     world.push(shadow(x + 8, y + 17.5, 6))
-    if (f.status === 'working') {
+    const laptop = (key: string): void => { world.push(img(key, p.x - 4, p.y + 8, 9, 7)) }
+    if (f.status === 'working' && f.tools === 0) {
+      // Thinking before its first tool call: the laptop still dark, three dots.
+      world.push(img('claude_stand', x, y, 16, 18))
+      laptop('laptop_2')
+      ui.push(bubble(x + 8, y - 1, 'dots'))
+    } else if (f.status === 'working') {
       world.push(flip('claude_type', 'claude_stand', x, y, 16, 18, i * 0.2))
       world.push(flip('laptop_0', 'laptop_1', p.x - 4, p.y + 8, 9, 7, i * 0.2 + 0.45))
       ui.push(bubble(x + 8, y - 1, 'terminal'))
+    } else if (f.status === 'asking') {
+      // A permission prompt or a question is up: hands off the laptop, a red mark until the person answers.
+      world.push(img('claude_stand', x, y, 16, 18))
+      laptop('laptop_0')
+      ui.push(bubble(x + 8, y - 1, 'alert', true))
     } else if (f.status === 'waiting') {
       // Standing still: only the bubble bobs, so a waiting Claude never flickers.
       world.push(img('claude_stand', x, y, 16, 18))
       ui.push(bubble(x + 8, y - 1, 'ask', true))
+    } else if (f.status === 'stopped') {
+      // The turn was stopped or failed: eyes shut, the laptop off, the crops wilting.
+      world.push(img('claude_blink', x, y, 16, 18))
+      laptop('laptop_2')
     } else if (f.status === 'pending') {
       // Still images from here on, which cost the pane nothing to keep drawn.
       world.push(img('claude_stand', x, y, 16, 18))
+    } else if (f.isFresh) {
+      // The step just finished: a happy Claude by the harvest.
+      world.push(img('claude_happy', x, y, 16, 18))
+      ui.push(bubble(x + 8, y - 1, 'heart'))
     } else {
       world.push(img('claude_sleep', x, y, 16, 18))
       if (f.status === 'asleep') ui.push(bubble(x + 8, y + 3, 'zzz'))
@@ -286,10 +348,12 @@ const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = 1, hour = 12):
     ui.push(sign(p.x, p.y + p.h + 2, signName(f.name || 'claude'), f.isCurrent ?? false))
   })
 
+  world.push(bales(harvest))
   world.push(`<image href="${FG}" x="0" y="${WORLD.fgY * HD}" width="${VW}" height="${VH - WORLD.fgY * HD}"/>`)
 
   const sky = skyAt(hour)
   if (WASH[sky]) world.push(`<rect width="${VW}" height="${VH}" fill="${WASH[sky]}"/>`)
+  if (sky === 'night' || sky === 'dusk') world.push(barnLights(sky === 'night'))
   if (sky === 'night')
     FIREFLIES.forEach(([fx, fy], k) =>
       world.push(`<g class="ff" style="animation-delay:-${(k * 0.83) % 3.2}s"><circle cx="${fx * HD}" cy="${fy * HD}" r="${2.5 * HD}" fill="#e9ff8a" opacity=".22"/>${box(fx - 0.5, fy - 0.5, 1, 1, '#f4ffb0')}</g>`),
@@ -299,14 +363,15 @@ const sceneSvg = (farmers: Farmer[], harvest: number, taskCount = 1, hour = 12):
 
   const helpers = farmers.reduce((n, f) => n + f.helpers.length, 0)
   const done = farmers.filter(f => f.status === 'done').length
-  ui.push(board(farmers.some(f => f.status === 'working'), [
+  ui.push(board(farmers.some(f => f.status === 'working' || f.status === 'asking'), [
     ['TASKS', String(taskCount)],
     ['STEPS', `${done}/${farmers.length}`],
     ['HELPERS', String(helpers)],
     ['HARVEST', String(harvest)],
   ]))
 
-  const defs = '<defs><radialGradient id="vig" cx="50%" cy="52%" r="70%"><stop offset="62%" stop-color="#0c140a" stop-opacity="0"/><stop offset="100%" stop-color="#0c140a" stop-opacity=".38"/></radialGradient></defs>'
+  const defs = '<defs><radialGradient id="vig" cx="50%" cy="52%" r="70%"><stop offset="62%" stop-color="#0c140a" stop-opacity="0"/><stop offset="100%" stop-color="#0c140a" stop-opacity=".38"/></radialGradient>' +
+    '<filter id="dry" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values=".5 .45 .1 0 .06  .38 .4 .1 0 .03  .2 .22 .06 0 0  0 0 0 1 0"/></filter></defs>'
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${VW}" height="${VH}" viewBox="0 0 ${VW} ${VH}">${CSS}${defs}${world.join('')}<g shape-rendering="crispEdges">${ui.join('')}</g></svg>`
 }
 
@@ -331,16 +396,25 @@ const isWrapTool = (tool: string): boolean => tool.includes('ccd_turn') && tool.
 
 const asStatus = (s: unknown): Step['status'] => (s === 'completed' || s === 'in_progress' ? s : 'pending')
 
+// When each step started and finished, stamped as the plan moves: a step put in progress for the first time, one just done.
+const stamp = (before: readonly Step[], steps: Step[], now: number): Step[] =>
+  steps.map((s, i) => {
+    const was = before[i]?.status
+    if (s.status === 'in_progress' && s.startedAt === undefined) return { ...s, startedAt: now }
+    if (s.status === 'completed' && was !== undefined && was !== 'completed') return { ...s, doneAt: now }
+    return s
+  })
+
 // The task list's call applied the way the app applies it: a new list replaces the plan; a move changes one or two steps.
-const applyPlan = (p: Plan, a: PlanArgs): Plan => {
+const applyPlan = (p: Plan, a: PlanArgs, now = 0): Plan => {
   if (Array.isArray(a.items))
     return {
       seq: p.seq + 1,
-      steps: a.items.slice(0, MAX_STEPS).map((it: { content?: unknown; status?: unknown } | null): Step => ({
+      steps: stamp([], a.items.slice(0, MAX_STEPS).map((it: { content?: unknown; status?: unknown } | null): Step => ({
         name: typeof it?.content === 'string' ? it.content : 'step',
         status: asStatus(it?.status),
         tools: 0,
-      })),
+      })), now),
     }
   const steps = p.steps.map(s => ({ ...s }))
   const at = (n: unknown): Step | undefined => (typeof n === 'number' ? steps[n - 1] : undefined)
@@ -357,8 +431,11 @@ const applyPlan = (p: Plan, a: PlanArgs): Plan => {
     steps.forEach(s => { if (s.status === 'in_progress') s.status = 'pending' })
     started.status = 'in_progress'
   }
-  return { ...p, steps }
+  return { ...p, steps: stamp(p.steps, steps, now) }
 }
+
+// The wrap-up finishes every step.
+const finishPlan = (p: Plan, now = 0): Plan => ({ ...p, steps: stamp(p.steps, p.steps.map(s => ({ ...s, status: 'completed' as const })), now) })
 
 // A tool call of the main loop counts toward the step in progress.
 const countCall = (p: Plan): Plan => {
@@ -366,7 +443,7 @@ const countCall = (p: Plan): Plan => {
   return i < 0 ? p : { ...p, steps: p.steps.map((s, k) => (k === i ? { ...s, tools: s.tools + 1 } : s)) }
 }
 
-export { applyPlan, asFarmers, sceneSvg, seat, signName, taskName, VW, VH }
+export { applyPlan, asFarmers, finishPlan, sceneSvg, seat, signName, taskName, VW, VH }
 
 // --- wiring ---------------------------------------------------------------
 
@@ -396,10 +473,10 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
-      const f = await update($, farm, g => ({ ...g, isWorking: true, turnText: e.text, turnHadTools: false }))
+      const f = await update($, farm, g => ({ ...g, isWorking: true, isStopped: false, isAsking: false, turnText: e.text, turnHadTools: false }))
       // Before any task list, the first prompt is a plan of one step.
       if ((await read($, plan)).steps.length === 0)
-        await update($, plan, (p): Plan => ({ seq: p.seq + 1, steps: [{ name: taskName(f.turnText, 1), status: 'in_progress', tools: 0 }] }))
+        await update($, plan, (p): Plan => ({ seq: p.seq + 1, steps: [{ name: taskName(f.turnText, 1), status: 'in_progress', tools: 0, startedAt: Date.now() }] }))
     }
     return next(e)
   })
@@ -407,8 +484,9 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const agentId = e.agentId
     if (agentId === undefined) {
-      // A turn that did some work is a crop brought in.
-      const f = await update($, farm, g => ({ ...g, isWorking: false, turnHadTools: false, harvest: g.harvest + (g.turnHadTools ? 1 : 0) }))
+      // A turn that did some work is a crop brought in; one stopped or failed leaves its step wilting.
+      const isStopped = e.reason === 'aborted' || e.reason === 'error'
+      const f = await update($, farm, g => ({ ...g, isWorking: false, isAsking: false, isStopped, turnHadTools: false, harvest: g.harvest + (g.turnHadTools && !isStopped ? 1 : 0) }))
       await $.store.set('harvest', f.harvest)
       return next(e)
     }
@@ -436,16 +514,35 @@ export const register: Register = on => {
       const args = e as unknown as PlanArgs
       const isPlan = isPlanTool(e.tool)
       const isWrap = isWrapTool(e.tool)
-      await update($, plan, p =>
-        countCall(isPlan ? applyPlan(p, args) : isWrap ? { ...p, steps: p.steps.map(s => ({ ...s, status: 'completed' as const })) } : p),
-      )
+      const now = Date.now()
+      await update($, plan, p => countCall(isPlan ? applyPlan(p, args, now) : isWrap ? finishPlan(p, now) : p))
       const isNewTask = isPlan && (args.scope === 'first_task' || args.scope === 'new_task')
       if (isNewTask || !(await read($, farm)).turnHadTools)
         await update($, farm, f => ({ ...f, turnHadTools: true, taskCount: f.taskCount + (isNewTask ? 1 : 0) }))
     } catch {
       // A missed count costs a sprout, never the call.
     }
-    return next(e)
+    const result = await next(e)
+    // Once the call has run, whatever it asked the person has been answered.
+    try {
+      if ((await read($, farm)).isAsking) await update($, farm, f => ({ ...f, isAsking: false }))
+    } catch {
+      // The mark stays up a call longer, the result still goes back.
+    }
+    return result
+  })
+
+  // A call of the main loop put to the person (a permission prompt, a question) raises the red mark until it runs.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    if (!e.agentId && e.tool_use_id && e.approver === 'person' && verdict.decision === 'ask') {
+      try {
+        await update($, farm, f => ({ ...f, isAsking: true }))
+      } catch {
+        // A mark not raised, the prompt still shows.
+      }
+    }
+    return verdict
   })
 
   on('agent.spawn', async ($, e, next) => {
@@ -473,7 +570,7 @@ export const register: Register = on => {
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
     const f = await read($, farm)
-    const farmers = asFarmers(await read($, plan), await read($, critters), f.isWorking)
+    const farmers = asFarmers(await read($, plan), await read($, critters), f.isWorking, { isAsking: f.isAsking, isStopped: f.isStopped, now: Date.now() })
     const done = farmers.filter(x => x.status === 'done').length
 
     if (e.surface !== 'terminal' && 'Svg' in ui) {
@@ -490,8 +587,8 @@ export const register: Register = on => {
     }
 
     // The terminal has no pictures: the same farm in a few lines.
-    const word = { working: 'working', waiting: 'waiting for you', done: 'done', pending: 'next', asleep: 'asleep' } as const
-    const icon = { working: '🌱', waiting: '🌸', done: '🧺', pending: '🟫', asleep: '💤' } as const
+    const word = { working: 'working', asking: 'needs your OK', waiting: 'waiting for you', stopped: 'stopped', done: 'done', pending: 'next', asleep: 'asleep' } as const
+    const icon = { working: '🌱', asking: '❗', waiting: '🌸', stopped: '🥀', done: '🧺', pending: '🟫', asleep: '💤' } as const
     return (
       <Box flexDirection="column">
         <Text>🦀 Crab Farm · {done}/{farmers.length} steps · 🌸 {f.harvest}</Text>

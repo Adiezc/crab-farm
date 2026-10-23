@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { applyPlan, asFarmers, sceneSvg, seat, signName, taskName } from './register'
+import { applyPlan, asFarmers, finishPlan, sceneSvg, seat, signName, taskName } from './register'
 import type { Critter, Farmer, Plan } from '../types'
 
 const models = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1']
@@ -27,7 +27,7 @@ test('the farm is washed by the hour, with fireflies only at night', async () =>
 
 test('only the busy Claude animates', async () => {
   expect(sceneSvg([farmer(0, { status: 'done', helpers: [] }), farmer(1, { status: 'pending', helpers: [] })], 0)).not.toContain('class="fa"')
-  expect(sceneSvg([farmer(0, { status: 'working', helpers: [] })], 0)).toContain('class="fa"')
+  expect(sceneSvg([farmer(0, { status: 'working', tools: 3, helpers: [] })], 0)).toContain('class="fa"')
 })
 
 test('a plan of eight shows six plots, keeping the step in progress in view', async () => {
@@ -64,6 +64,43 @@ test('the task list moves the plan as the app does', async () => {
   const r = applyPlan(q, { done: [2], start: 3 })
   expect(r.steps.map(s => s.status)).toEqual(['completed', 'completed', 'in_progress'])
   expect(applyPlan(r, { start: 1 }).steps.map(s => s.status)).toEqual(['in_progress', 'completed', 'pending'])
+})
+
+test('a step in progress reads as asking while a call waits on the person, stopped after a stopped turn', async () => {
+  const p = plan('completed', 'in_progress')
+  expect(asFarmers(p, [], true, { isAsking: true })[1]?.status).toBe('asking')
+  expect(asFarmers(p, [], false, { isStopped: true })[1]?.status).toBe('stopped')
+  expect(asFarmers(p, [], false, { isAsking: true })[1]?.status).toBe('waiting')
+})
+
+test('steps are stamped as they start and finish, and the last one finished celebrates', async () => {
+  const p = applyPlan({ seq: 0, steps: [] }, { items: [{ content: 'A', status: 'in_progress' }, { content: 'B', status: 'pending' }] }, 1000)
+  expect(p.steps[0]?.startedAt).toBe(1000)
+  const q = applyPlan(p, { advance: true }, 2000)
+  expect(q.steps.map(s => [s.startedAt, s.doneAt])).toEqual([[1000, 2000], [2000, undefined]])
+  expect(asFarmers(q, [], true).map(f => f.isFresh)).toEqual([true, false])
+  const r = finishPlan(q, 3000)
+  expect(r.steps.map(s => s.doneAt)).toEqual([2000, 3000])
+  expect(asFarmers(r, [], false).map(f => f.isFresh)).toEqual([false, true])
+})
+
+test('crops grow with time as well as tool calls, and wilt when the turn stopped', async () => {
+  const p: Plan = { seq: 1, steps: [{ name: 'a', status: 'in_progress', tools: 0, startedAt: 0 }] }
+  const at = (min: number, m = {}) => asFarmers(p, [], false, { now: min * 60000, ...m })
+  expect(at(20)[0]?.minutes).toBe(20)
+  expect(sceneSvg(at(20), 0)).toContain(`href="${'data:'}`)
+  const wilt = sceneSvg(at(20, { isStopped: true }), 0)
+  const fresh = sceneSvg(at(0, { isStopped: true }), 0)
+  expect(wilt.length).toBeGreaterThan(fresh.length)
+})
+
+test('the farm gets new states drawn, bales for the harvest and lit windows at night', async () => {
+  const one = (over: Partial<Farmer>) => sceneSvg([farmer(0, { helpers: [], ...over })], 0)
+  for (const status of ['asking', 'stopped', 'working', 'done'] as const) expect(one({ status }).startsWith('<svg')).toBe(true)
+  expect(one({ status: 'done', isFresh: true })).not.toBe(one({ status: 'done' }))
+  expect(sceneSvg([], 30, 0, 13).length).toBeGreaterThan(sceneSvg([], 0, 0, 13).length)
+  expect(sceneSvg([], 0, 0, 23)).toContain('#ffd77a')
+  expect(sceneSvg([], 0, 0, 13)).not.toContain('#ffd77a')
 })
 
 test('a plan of one step is named after its prompt, never the app\'s reminders', async () => {
@@ -123,6 +160,11 @@ test('each step of the task list gets a Claude, and its subagents help on its pl
   expect(await line(/Rework the plots/)).toContain('waiting for you')
 
   await $.turn.start({ turnId: '2', text: 'go on' })
+  await $.turn.complete({ turnId: '2', reason: 'aborted', text: '' } as never)
+  expect(await line(/Rework the plots/)).toContain('stopped')
+
+  await $.turn.start({ turnId: '3', text: 'go on' })
+  expect(await line(/Rework the plots/)).toContain('working')
   await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done' })
   expect(await line(/Crab Farm/)).toContain('3/3 steps')
 })
