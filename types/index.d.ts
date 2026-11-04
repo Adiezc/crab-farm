@@ -31,6 +31,8 @@ export type Step = {
 export type Plan = {
   seq: number
   steps: Step[]
+  /** A plan of one step made from a prompt, not the task list: the next prompt replaces it. */
+  isAuto?: boolean
 }
 
 export type Critter = {

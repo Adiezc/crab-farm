@@ -49,13 +49,16 @@ const modelKey = (model: string): 'haiku' | 'sonnet' | 'opus' | 'fable' => {
   return m.includes('haiku') ? 'haiku' : m.includes('sonnet') ? 'sonnet' : m.includes('fable') ? 'fable' : 'opus'
 }
 
-// One sprite at world coordinates; `cls` lets CSS swap frames.
-const img = (key: string, x: number, y: number, w: number, h: number, cls = ''): string =>
-  `<image href="${SPRITES[key] ?? ''}" x="${x * HD}" y="${y * HD}" width="${w * HD}" height="${h * HD}"${cls ? ` class="${cls}"` : ''}/>`
+// One sprite at world coordinates; `cls` lets CSS swap frames, `style` offsets their timing.
+const img = (key: string, x: number, y: number, w: number, h: number, cls = '', style = ''): string =>
+  `<image href="${SPRITES[key] ?? ''}" x="${x * HD}" y="${y * HD}" width="${w * HD}" height="${h * HD}"${cls ? ` class="${cls}"` : ''}${style ? ` style="${style}"` : ''}/>`
 
-// Two frames that alternate, as clodfarm animates its critters.
-const flip = (a: string, b: string, x: number, y: number, w: number, h: number, delay = 0): string =>
-  `<g style="animation-delay:-${delay}s">${img(a, x, y, w, h, 'fa')}${img(b, x, y, w, h, 'fb')}</g>`
+// Two frames that alternate, as clodfarm animates its critters. The delay sits on the frames themselves, where the
+// animation runs, so neighbours step out of time with each other.
+const flip = (a: string, b: string, x: number, y: number, w: number, h: number, delay = 0): string => {
+  const style = delay ? `animation-delay:-${+delay.toFixed(2)}s` : ''
+  return img(a, x, y, w, h, 'fa', style) + img(b, x, y, w, h, 'fb', style)
+}
 
 const box = (x: number, y: number, w: number, h: number, fill: string, extra = ''): string =>
   `<rect x="${x * HD}" y="${y * HD}" width="${w * HD}" height="${h * HD}" fill="${fill}"${extra}/>`
@@ -237,13 +240,16 @@ const asFarmers = (p: Plan, crit: Critter[], isWorking: boolean, m: Moment = {})
     if (s.status === 'completed' && s.doneAt !== undefined && (fresh < 0 || s.doneAt >= (p.steps[fresh]?.doneAt ?? 0))) fresh = i
   })
   const inProgress = isWorking ? (m.isAsking ? 'asking' : 'working') : m.isStopped ? 'stopped' : 'waiting'
+  // A helper still running from a plan since replaced helps where a new one would go, never on no plot at all.
+  const here = helpStep(p)
+  const plotOf = (c: Critter): string => (c.step.startsWith(`${p.seq}:`) ? c.step : here)
   return p.steps.map((s, i) => ({
     id: stepKey(p.seq, i),
     name: s.name,
     status: s.status === 'completed' ? 'done' : s.status === 'pending' ? 'pending' : inProgress,
     tools: s.tools,
     minutes: s.status === 'in_progress' && s.startedAt !== undefined && m.now ? Math.max(0, (m.now - s.startedAt) / 60000) : 0,
-    helpers: crit.filter(c => c.step === stepKey(p.seq, i) && c.status === 'running').map(c => ({ label: c.label, model: c.model })),
+    helpers: crit.filter(c => c.status === 'running' && plotOf(c) === stepKey(p.seq, i)).map(c => ({ label: c.label, model: c.model })),
     isCurrent: i === current,
     isFresh: i === fresh,
   }))
@@ -405,17 +411,31 @@ const stamp = (before: readonly Step[], steps: Step[], now: number): Step[] =>
     return s
   })
 
+// Which step a list's entry is, across lists: its name and how many steps of that name came before it.
+const sameStep = (steps: readonly { name: string }[]): string[] => {
+  const seen = new Map<string, number>()
+  return steps.map(s => { const k = seen.get(s.name) ?? 0; seen.set(s.name, k + 1); return `${k}:${s.name}` })
+}
+
 // The task list's call applied the way the app applies it: a new list replaces the plan; a move changes one or two steps.
+// A step the new list names again keeps its crops and its stamps, so a re-plan mid-task loses no progress.
 const applyPlan = (p: Plan, a: PlanArgs, now = 0): Plan => {
-  if (Array.isArray(a.items))
-    return {
-      seq: p.seq + 1,
-      steps: stamp([], a.items.slice(0, MAX_STEPS).map((it: { content?: unknown; status?: unknown } | null): Step => ({
-        name: typeof it?.content === 'string' ? it.content : 'step',
-        status: asStatus(it?.status),
-        tools: 0,
-      })), now),
-    }
+  if (Array.isArray(a.items)) {
+    const oldKeys = sameStep(p.steps)
+    const prev = new Map(p.steps.map((s, i) => [oldKeys[i] ?? '', s]))
+    const listed = a.items.slice(0, MAX_STEPS).map((it: { content?: unknown; status?: unknown } | null) => ({
+      name: typeof it?.content === 'string' ? it.content : 'step',
+      status: asStatus(it?.status),
+    }))
+    const olds = sameStep(listed).map(k => prev.get(k))
+    const steps = listed.map(({ name, status }, i): Step => {
+      const old = olds[i]
+      return old
+        ? { name, status, tools: old.tools, startedAt: old.startedAt, doneAt: status === 'completed' ? old.doneAt : undefined }
+        : { name, status, tools: 0 }
+    })
+    return { seq: p.seq + 1, steps: stamp(steps.map((s, i) => olds[i] ?? s), steps, now) }
+  }
   const steps = p.steps.map(s => ({ ...s }))
   const at = (n: unknown): Step | undefined => (typeof n === 'number' ? steps[n - 1] : undefined)
   if (a.advance === true) {
@@ -437,13 +457,39 @@ const applyPlan = (p: Plan, a: PlanArgs, now = 0): Plan => {
 // The wrap-up finishes every step.
 const finishPlan = (p: Plan, now = 0): Plan => ({ ...p, steps: stamp(p.steps, p.steps.map(s => ({ ...s, status: 'completed' as const })), now) })
 
-// A tool call of the main loop counts toward the step in progress.
+// A tool call of the main loop counts toward the step in progress, until its crops are fully grown: past that a count
+// changes nothing drawn, so the plan is left as it is and nothing is written.
+const FULL_GROWN_AT = 8
 const countCall = (p: Plan): Plan => {
   const i = p.steps.findIndex(s => s.status === 'in_progress')
-  return i < 0 ? p : { ...p, steps: p.steps.map((s, k) => (k === i ? { ...s, tools: s.tools + 1 } : s)) }
+  const s = p.steps[i]
+  return !s || s.tools >= FULL_GROWN_AT ? p : { ...p, steps: p.steps.map((x, k) => (k === i ? { ...x, tools: x.tools + 1 } : x)) }
 }
 
-export { applyPlan, asFarmers, finishPlan, sceneSvg, seat, signName, taskName, VW, VH }
+// The plot a subagent helps on: the step in progress, else the next one up, else the last.
+const helpStep = (p: Plan): string => {
+  const i = p.steps.findIndex(s => s.status === 'in_progress')
+  const next = p.steps.findIndex(s => s.status === 'pending')
+  return stepKey(p.seq, i >= 0 ? i : next >= 0 ? next : Math.max(0, p.steps.length - 1))
+}
+
+// After a new list replaces the plan, running helpers move to the step of the same name, else to where a new one would go.
+const rehome = (crit: Critter[], before: Plan, after: Plan): Critter[] => {
+  const isMoving = (c: Critter): boolean => before.seq !== after.seq && c.status === 'running' && c.step.startsWith(`${before.seq}:`)
+  if (!crit.some(isMoving)) return crit
+  const oldKeys = sameStep(before.steps)
+  const newKeys = sameStep(after.steps)
+  return crit.map(c => {
+    if (!isMoving(c)) return c
+    const j = newKeys.indexOf(oldKeys[Number(c.step.slice(c.step.indexOf(':') + 1))] ?? '')
+    return { ...c, step: j >= 0 ? stepKey(after.seq, j) : helpStep(after) }
+  })
+}
+
+// What of the drawing changes with the clock alone: the light, and the crops growing by the minute.
+const timeKey = (farmers: Farmer[], hour: number): string => `${skyAt(hour)}|${farmers.map(plotStage).join(',')}`
+
+export { applyPlan, asFarmers, countCall, timeKey, finishPlan, helpStep, plotStage, rehome, sceneSvg, seat, signName, skyAt, taskName, VW, VH }
 
 // --- wiring ---------------------------------------------------------------
 
@@ -454,9 +500,27 @@ async function togglePane($: EngineInterface): Promise<boolean> {
   return !isOpen
 }
 
+// The farm as the clock last drew it: a minute's tick redraws only when the light or a crop would look different.
+let drawnKey = ''
+let tick: { cancel: () => void } | undefined
+
+async function timeKeyNow($: EngineInterface): Promise<string> {
+  const f = await read($, farm)
+  const farmers = asFarmers(await read($, plan), await read($, critters), f.isWorking, { isAsking: f.isAsking, isStopped: f.isStopped, now: Date.now() })
+  return timeKey(farmers, new Date().getHours())
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    try {
+      tick?.cancel()
+      tick = $.clock.every(60_000, () => {
+        void timeKeyNow($).then(key => { if (key !== drawnKey) $.ui.invalidate('ui.render') }).catch(() => undefined)
+      })
+    } catch {
+      // No ticking clock: the farm still redraws with every change Claude makes.
+    }
     await $.command.register({ name: 'farm', description: 'Show or hide Crab Farm, a pixel farm of the steps Claude is working on and their helpers' })
     const harvest = Number((await $.store.get('harvest')) ?? 0)
     await update($, farm, f => ({ ...f, harvest }))
@@ -474,9 +538,11 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       const f = await update($, farm, g => ({ ...g, isWorking: true, isStopped: false, isAsking: false, turnText: e.text, turnHadTools: false }))
-      // Before any task list, the first prompt is a plan of one step.
-      if ((await read($, plan)).steps.length === 0)
-        await update($, plan, (p): Plan => ({ seq: p.seq + 1, steps: [{ name: taskName(f.turnText, 1), status: 'in_progress', tools: 0, startedAt: Date.now() }] }))
+      // With no plan, one already finished, or one made from the last prompt, the prompt is a plan of one step: its Claude
+      // works until a task list says otherwise. Helpers still running from the plan before move to it as it's drawn.
+      const p0 = await read($, plan)
+      if (p0.isAuto || p0.steps.every(s => s.status === 'completed'))
+        await update($, plan, (p): Plan => ({ seq: p.seq + 1, isAuto: true, steps: [{ name: taskName(f.turnText, 1), status: 'in_progress', tools: 0, startedAt: Date.now() }] }))
     }
     return next(e)
   })
@@ -488,6 +554,9 @@ export const register: Register = on => {
       const isStopped = e.reason === 'aborted' || e.reason === 'error'
       const f = await update($, farm, g => ({ ...g, isWorking: false, isAsking: false, isStopped, turnHadTools: false, harvest: g.harvest + (g.turnHadTools && !isStopped ? 1 : 0) }))
       await $.store.set('harvest', f.harvest)
+      // A helper spawned without an id can't be matched to its end: it leaves with the turn that spawned it.
+      if ((await read($, critters)).some(c => c.agentId === undefined && c.status === 'running'))
+        await update($, critters, list => list.map((c): Critter => (c.agentId === undefined && c.status === 'running' ? { ...c, status: 'done' } : c)))
       return next(e)
     }
     const isDone = e.reason === 'answer'
@@ -515,7 +584,12 @@ export const register: Register = on => {
       const isPlan = isPlanTool(e.tool)
       const isWrap = isWrapTool(e.tool)
       const now = Date.now()
-      await update($, plan, p => countCall(isPlan ? applyPlan(p, args, now) : isWrap ? finishPlan(p, now) : p))
+      const before = await read($, plan)
+      if (isPlan || isWrap || countCall(before) !== before) {
+        const after = await update($, plan, p => countCall(isPlan ? applyPlan(p, args, now) : isWrap ? finishPlan(p, now) : p))
+        const crit = await read($, critters)
+        if (rehome(crit, before, after) !== crit) await update($, critters, list => rehome(list, before, after))
+      }
       const isNewTask = isPlan && (args.scope === 'first_task' || args.scope === 'new_task')
       if (isNewTask || !(await read($, farm)).turnHadTools)
         await update($, farm, f => ({ ...f, turnHadTools: true, taskCount: f.taskCount + (isNewTask ? 1 : 0) }))
@@ -532,7 +606,8 @@ export const register: Register = on => {
     return result
   })
 
-  // A call of the main loop put to the person (a permission prompt, a question) raises the red mark until it runs.
+  // A call of the main loop put to the person (a permission prompt, a question) raises the red mark. No event marks the
+  // person's answer, so it comes down once the call is over: approved and run, or denied.
   on('tool.check', async ($, e, next) => {
     const verdict = await next(e)
     if (!e.agentId && e.tool_use_id && e.approver === 'person' && verdict.decision === 'ask') {
@@ -549,12 +624,10 @@ export const register: Register = on => {
     const started = await next(e)
     if (started.deny !== undefined) return started
     try {
-      const p = await read($, plan)
-      const i = p.steps.findIndex(s => s.status === 'in_progress')
       const critter: Critter = {
         id: started.agentId ?? e.tool_use_id,
         agentId: started.agentId,
-        step: stepKey(p.seq, i >= 0 ? i : Math.max(0, p.steps.length - 1)),
+        step: helpStep(await read($, plan)),
         label: e.description,
         model: started.model ?? '',
         status: 'running',
@@ -572,6 +645,7 @@ export const register: Register = on => {
     const f = await read($, farm)
     const farmers = asFarmers(await read($, plan), await read($, critters), f.isWorking, { isAsking: f.isAsking, isStopped: f.isStopped, now: Date.now() })
     const done = farmers.filter(x => x.status === 'done').length
+    drawnKey = timeKey(farmers, new Date().getHours())
 
     if (e.surface !== 'terminal' && 'Svg' in ui) {
       const { Svg } = ui
