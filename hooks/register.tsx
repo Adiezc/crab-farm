@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Critter, Farm, Farmer, Plan, Step } from '../types'
+import type { Critter12 as Critter, Farm12 as Farm, Farmer, Plan12 as Plan, Step12 as Step } from '../types'
 import { BG, FG, ICONS, LAYOUT, SPRITES, WORLD } from './art'
 
 // A purely visual farm in clodfarm's look: it only listens to what Claude already does and draws it.

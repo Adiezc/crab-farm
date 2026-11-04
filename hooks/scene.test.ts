@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { SPRITES } from './art'
 import { applyPlan, asFarmers, countCall, finishPlan, helpStep, plotStage, rehome, sceneSvg, seat, signName, taskName, timeKey } from './register'
-import type { Critter, Farmer, Plan } from '../types'
+import type { Critter12 as Critter, Farmer, Plan12 as Plan } from '../types'
 
 const count = (s: string, part: string): number => s.split(part).length - 1
 

@@ -56,3 +56,14 @@ export const ICONS: Record<string, string> = {
 "ask": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAWUlEQVR4AYTO0QnAIAyEYdu5OkFXcR5XcQL3Uv5gQOKJwj2Y+zC+aZ7vz11l1skggEGr5VnDzDuDXlKcYlCV/hKP0EsYkYQKSchQZVvNn0jEG2Q1ucII/D4AAAD//xMsT8sAAAAGSURBVAMASOov9ZN8cDQAAAAASUVORK5CYII=",
 "heart": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAbUlEQVR4AYyMwQ2AQAgEkSb8WohN3NcC/V4TFuLXKjRD4IKGh5dwsLMLKj+fBc+23lTeQVPBFDG3TShmjOh5touAq+80ySED/lkwQs7Kpks/ptJxGL5dDOHeaJlbECfDSo9gNr9LeK8goArBHwAAAP//CwSpNAAAAAZJREFUAwBTbioVLyUFywAAAABJRU5ErkJggg=="
 }
+
+// STUB until the art build (scripts/build_art.py) writes this file whole: an empty atlas with a cell of the
+// catalogue's size for every sprite, so the renderers compile and run before the art lands.
+import { SPRITE_SIZES } from './contracts'
+import type { Pose, SpriteId } from './contracts'
+export const ATLAS = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg=='
+export const ATLAS_SIZE = { w: 1, h: 1 } as const
+export const SYMBOLS = Object.fromEntries(
+  Object.entries(SPRITE_SIZES).map(([id, [w, h]]) => [id, [0, 0, w * 2, h * 2] as const]),
+) as unknown as Readonly<Record<SpriteId, readonly [number, number, number, number]>>
+export const HAT_DY: Readonly<Partial<Record<Pose, number>>> = {}
