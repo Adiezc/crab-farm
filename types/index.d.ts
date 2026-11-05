@@ -166,6 +166,10 @@ export type Live = {
   /** Next Job.n and Fx.n. */
   seq: number
   earn: Earn
+  /** The project's folder name, painted on the sign by the gate. */
+  project?: string
+  /** The model driving the main loop: the working crab's hat band wears its colour. */
+  model?: Model
 }
 
 // ---- progression ----

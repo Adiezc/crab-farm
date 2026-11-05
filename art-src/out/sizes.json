@@ -1,0 +1,720 @@
+{
+ "atlasChars": 11486,
+ "atlasSize": [
+  245,
+  291
+ ],
+ "bgChars": 29699,
+ "cells": 140,
+ "fgChars": 4263,
+ "missing": [],
+ "sprites": {
+  "bale": {
+   "h": 6,
+   "opaque": 167,
+   "w": 8
+  },
+  "barrel": {
+   "h": 9,
+   "opaque": 208,
+   "w": 6
+  },
+  "basket_eggs": {
+   "h": 5,
+   "opaque": 101,
+   "w": 7
+  },
+  "bat_0": {
+   "h": 2,
+   "opaque": 16,
+   "w": 4
+  },
+  "bat_1": {
+   "h": 2,
+   "opaque": 14,
+   "w": 4
+  },
+  "bee": {
+   "h": 2,
+   "opaque": 12,
+   "w": 2
+  },
+  "bench": {
+   "h": 7,
+   "opaque": 320,
+   "w": 14
+  },
+  "bird_0": {
+   "h": 3,
+   "opaque": 16,
+   "w": 4
+  },
+  "bird_1": {
+   "h": 3,
+   "opaque": 14,
+   "w": 4
+  },
+  "blades": {
+   "h": 22,
+   "opaque": 740,
+   "w": 22
+  },
+  "butterfly_0": {
+   "h": 3,
+   "opaque": 22,
+   "w": 3
+  },
+  "butterfly_1": {
+   "h": 3,
+   "opaque": 12,
+   "w": 3
+  },
+  "cat_sit": {
+   "h": 7,
+   "opaque": 114,
+   "w": 6
+  },
+  "cat_sleep": {
+   "h": 5,
+   "opaque": 107,
+   "w": 8
+  },
+  "cat_walk_0": {
+   "h": 6,
+   "opaque": 128,
+   "w": 8
+  },
+  "cat_walk_1": {
+   "h": 6,
+   "opaque": 124,
+   "w": 8
+  },
+  "chick": {
+   "h": 3,
+   "opaque": 29,
+   "w": 3
+  },
+  "cloud": {
+   "h": 10,
+   "opaque": 564,
+   "w": 24
+  },
+  "coin_0": {
+   "h": 5,
+   "opaque": 80,
+   "w": 5
+  },
+  "coin_1": {
+   "h": 5,
+   "opaque": 68,
+   "w": 5
+  },
+  "coin_2": {
+   "h": 5,
+   "opaque": 36,
+   "w": 5
+  },
+  "coin_3": {
+   "h": 5,
+   "opaque": 68,
+   "w": 5
+  },
+  "compost_0": {
+   "h": 6,
+   "opaque": 220,
+   "w": 12
+  },
+  "compost_1": {
+   "h": 8,
+   "opaque": 266,
+   "w": 12
+  },
+  "compost_2": {
+   "h": 10,
+   "opaque": 318,
+   "w": 12
+  },
+  "confetti_0": {
+   "h": 6,
+   "opaque": 26,
+   "w": 8
+  },
+  "confetti_1": {
+   "h": 6,
+   "opaque": 26,
+   "w": 8
+  },
+  "coop": {
+   "h": 22,
+   "opaque": 1178,
+   "w": 22
+  },
+  "crab_armsup": {
+   "h": 18,
+   "opaque": 596,
+   "w": 16
+  },
+  "crab_blink": {
+   "h": 18,
+   "opaque": 498,
+   "w": 16
+  },
+  "crab_carry1": {
+   "h": 18,
+   "opaque": 626,
+   "w": 16
+  },
+  "crab_carry2": {
+   "h": 18,
+   "opaque": 626,
+   "w": 16
+  },
+  "crab_crouch": {
+   "h": 18,
+   "opaque": 466,
+   "w": 16
+  },
+  "crab_happy": {
+   "h": 18,
+   "opaque": 498,
+   "w": 16
+  },
+  "crab_look": {
+   "h": 18,
+   "opaque": 498,
+   "w": 16
+  },
+  "crab_reach": {
+   "h": 18,
+   "opaque": 466,
+   "w": 16
+  },
+  "crab_sit": {
+   "h": 18,
+   "opaque": 446,
+   "w": 16
+  },
+  "crab_sleep": {
+   "h": 18,
+   "opaque": 460,
+   "w": 16
+  },
+  "crab_stand": {
+   "h": 18,
+   "opaque": 498,
+   "w": 16
+  },
+  "crab_type": {
+   "h": 18,
+   "opaque": 498,
+   "w": 16
+  },
+  "crab_walk1": {
+   "h": 18,
+   "opaque": 490,
+   "w": 16
+  },
+  "crab_walk2": {
+   "h": 18,
+   "opaque": 490,
+   "w": 16
+  },
+  "crate": {
+   "h": 6,
+   "opaque": 154,
+   "w": 7
+  },
+  "crate_full": {
+   "h": 6,
+   "opaque": 144,
+   "w": 7
+  },
+  "crate_gold": {
+   "h": 6,
+   "opaque": 154,
+   "w": 7
+  },
+  "crop_grow_0": {
+   "h": 9,
+   "opaque": 30,
+   "w": 5
+  },
+  "crop_grow_1": {
+   "h": 9,
+   "opaque": 31,
+   "w": 5
+  },
+  "crop_grow_2": {
+   "h": 9,
+   "opaque": 30,
+   "w": 5
+  },
+  "crop_ripe_0": {
+   "h": 9,
+   "opaque": 48,
+   "w": 5
+  },
+  "crop_ripe_1": {
+   "h": 9,
+   "opaque": 52,
+   "w": 5
+  },
+  "crop_ripe_2": {
+   "h": 9,
+   "opaque": 52,
+   "w": 5
+  },
+  "crop_seed": {
+   "h": 9,
+   "opaque": 8,
+   "w": 5
+  },
+  "crop_sprout": {
+   "h": 9,
+   "opaque": 15,
+   "w": 5
+  },
+  "crow_0": {
+   "h": 4,
+   "opaque": 38,
+   "w": 5
+  },
+  "crow_1": {
+   "h": 4,
+   "opaque": 39,
+   "w": 5
+  },
+  "drop": {
+   "h": 3,
+   "opaque": 17,
+   "w": 2
+  },
+  "dust_0": {
+   "h": 3,
+   "opaque": 25,
+   "w": 6
+  },
+  "dust_1": {
+   "h": 3,
+   "opaque": 11,
+   "w": 6
+  },
+  "fish_0": {
+   "h": 3,
+   "opaque": 26,
+   "w": 4
+  },
+  "fish_1": {
+   "h": 3,
+   "opaque": 26,
+   "w": 4
+  },
+  "flowers": {
+   "h": 24,
+   "opaque": 1628,
+   "w": 17
+  },
+  "fox_0": {
+   "h": 6,
+   "opaque": 150,
+   "w": 10
+  },
+  "fox_1": {
+   "h": 6,
+   "opaque": 151,
+   "w": 10
+  },
+  "frog": {
+   "h": 3,
+   "opaque": 29,
+   "w": 3
+  },
+  "hat_beanie": {
+   "h": 8,
+   "opaque": 243,
+   "w": 16
+  },
+  "hat_crown": {
+   "h": 8,
+   "opaque": 182,
+   "w": 16
+  },
+  "hat_hood": {
+   "h": 8,
+   "opaque": 242,
+   "w": 16
+  },
+  "hat_straw": {
+   "h": 8,
+   "opaque": 282,
+   "w": 16
+  },
+  "hen_0": {
+   "h": 6,
+   "opaque": 89,
+   "w": 6
+  },
+  "hen_1": {
+   "h": 6,
+   "opaque": 82,
+   "w": 6
+  },
+  "hive": {
+   "h": 9,
+   "opaque": 216,
+   "w": 8
+  },
+  "icon_alert": {
+   "h": 8,
+   "opaque": 66,
+   "w": 8
+  },
+  "icon_ask": {
+   "h": 8,
+   "opaque": 71,
+   "w": 8
+  },
+  "icon_book": {
+   "h": 8,
+   "opaque": 165,
+   "w": 8
+  },
+  "icon_dots": {
+   "h": 8,
+   "opaque": 63,
+   "w": 8
+  },
+  "icon_gear": {
+   "h": 8,
+   "opaque": 170,
+   "w": 8
+  },
+  "icon_globe": {
+   "h": 8,
+   "opaque": 176,
+   "w": 8
+  },
+  "icon_heart": {
+   "h": 8,
+   "opaque": 129,
+   "w": 8
+  },
+  "icon_magnifier": {
+   "h": 8,
+   "opaque": 125,
+   "w": 8
+  },
+  "icon_plan": {
+   "h": 8,
+   "opaque": 162,
+   "w": 8
+  },
+  "icon_plug": {
+   "h": 8,
+   "opaque": 106,
+   "w": 8
+  },
+  "icon_quill": {
+   "h": 8,
+   "opaque": 79,
+   "w": 8
+  },
+  "icon_roster": {
+   "h": 8,
+   "opaque": 119,
+   "w": 8
+  },
+  "icon_scroll": {
+   "h": 8,
+   "opaque": 162,
+   "w": 8
+  },
+  "icon_terminal": {
+   "h": 8,
+   "opaque": 142,
+   "w": 8
+  },
+  "icon_zzz": {
+   "h": 8,
+   "opaque": 70,
+   "w": 8
+  },
+  "jetty": {
+   "h": 5,
+   "opaque": 217,
+   "w": 14
+  },
+  "laptop_0": {
+   "h": 7,
+   "opaque": 216,
+   "w": 9
+  },
+  "laptop_1": {
+   "h": 7,
+   "opaque": 216,
+   "w": 9
+  },
+  "laptop_2": {
+   "h": 7,
+   "opaque": 216,
+   "w": 9
+  },
+  "leaf_0": {
+   "h": 2,
+   "opaque": 9,
+   "w": 2
+  },
+  "leaf_1": {
+   "h": 2,
+   "opaque": 8,
+   "w": 2
+  },
+  "mailbox": {
+   "h": 10,
+   "opaque": 130,
+   "w": 6
+  },
+  "mailbox_up": {
+   "h": 10,
+   "opaque": 152,
+   "w": 6
+  },
+  "mini_fable_0": {
+   "h": 8,
+   "opaque": 222,
+   "w": 10
+  },
+  "mini_fable_1": {
+   "h": 8,
+   "opaque": 220,
+   "w": 10
+  },
+  "mini_fable_carry": {
+   "h": 8,
+   "opaque": 234,
+   "w": 10
+  },
+  "mini_haiku_0": {
+   "h": 8,
+   "opaque": 222,
+   "w": 10
+  },
+  "mini_haiku_1": {
+   "h": 8,
+   "opaque": 220,
+   "w": 10
+  },
+  "mini_haiku_carry": {
+   "h": 8,
+   "opaque": 234,
+   "w": 10
+  },
+  "mini_opus_0": {
+   "h": 8,
+   "opaque": 222,
+   "w": 10
+  },
+  "mini_opus_1": {
+   "h": 8,
+   "opaque": 220,
+   "w": 10
+  },
+  "mini_opus_carry": {
+   "h": 8,
+   "opaque": 234,
+   "w": 10
+  },
+  "mini_sonnet_0": {
+   "h": 8,
+   "opaque": 222,
+   "w": 10
+  },
+  "mini_sonnet_1": {
+   "h": 8,
+   "opaque": 220,
+   "w": 10
+  },
+  "mini_sonnet_carry": {
+   "h": 8,
+   "opaque": 234,
+   "w": 10
+  },
+  "owl_0": {
+   "h": 6,
+   "opaque": 95,
+   "w": 5
+  },
+  "owl_1": {
+   "h": 6,
+   "opaque": 95,
+   "w": 5
+  },
+  "prop_basket": {
+   "h": 6,
+   "opaque": 118,
+   "w": 7
+  },
+  "prop_book": {
+   "h": 4,
+   "opaque": 68,
+   "w": 5
+  },
+  "prop_bucket": {
+   "h": 5,
+   "opaque": 70,
+   "w": 5
+  },
+  "prop_can": {
+   "h": 6,
+   "opaque": 101,
+   "w": 7
+  },
+  "prop_can_2": {
+   "h": 6,
+   "opaque": 96,
+   "w": 8
+  },
+  "prop_crank": {
+   "h": 6,
+   "opaque": 108,
+   "w": 6
+  },
+  "prop_crate": {
+   "h": 6,
+   "opaque": 154,
+   "w": 7
+  },
+  "prop_hammer": {
+   "h": 5,
+   "opaque": 43,
+   "w": 5
+  },
+  "prop_hammer_2": {
+   "h": 5,
+   "opaque": 43,
+   "w": 5
+  },
+  "prop_hoe": {
+   "h": 10,
+   "opaque": 80,
+   "w": 6
+  },
+  "prop_hoe_2": {
+   "h": 6,
+   "opaque": 70,
+   "w": 8
+  },
+  "prop_lantern": {
+   "h": 6,
+   "opaque": 58,
+   "w": 4
+  },
+  "prop_letter": {
+   "h": 4,
+   "opaque": 70,
+   "w": 5
+  },
+  "prop_magnifier": {
+   "h": 5,
+   "opaque": 69,
+   "w": 5
+  },
+  "prop_rod": {
+   "h": 12,
+   "opaque": 139,
+   "w": 10
+  },
+  "prop_sack": {
+   "h": 7,
+   "opaque": 112,
+   "w": 6
+  },
+  "prop_umbrella": {
+   "h": 8,
+   "opaque": 172,
+   "w": 12
+  },
+  "puddle": {
+   "h": 3,
+   "opaque": 84,
+   "w": 8
+  },
+  "ripple": {
+   "h": 3,
+   "opaque": 32,
+   "w": 8
+  },
+  "scaffold_0": {
+   "h": 16,
+   "opaque": 343,
+   "w": 16
+  },
+  "scaffold_1": {
+   "h": 16,
+   "opaque": 611,
+   "w": 16
+  },
+  "scaffold_2": {
+   "h": 16,
+   "opaque": 729,
+   "w": 16
+  },
+  "scarecrow": {
+   "h": 22,
+   "opaque": 587,
+   "w": 16
+  },
+  "scarecrow_wave": {
+   "h": 22,
+   "opaque": 608,
+   "w": 16
+  },
+  "scarf": {
+   "h": 4,
+   "opaque": 111,
+   "w": 10
+  },
+  "snowman": {
+   "h": 10,
+   "opaque": 200,
+   "w": 8
+  },
+  "sparkle_0": {
+   "h": 5,
+   "opaque": 29,
+   "w": 5
+  },
+  "sparkle_1": {
+   "h": 5,
+   "opaque": 15,
+   "w": 5
+  },
+  "splash_0": {
+   "h": 4,
+   "opaque": 45,
+   "w": 6
+  },
+  "splash_1": {
+   "h": 4,
+   "opaque": 36,
+   "w": 6
+  },
+  "well": {
+   "h": 17,
+   "opaque": 675,
+   "w": 14
+  },
+  "well_pump": {
+   "h": 17,
+   "opaque": 670,
+   "w": 14
+  },
+  "windmill": {
+   "h": 32,
+   "opaque": 1452,
+   "w": 16
+  }
+ },
+ "termChars": 825,
+ "termPalette": 2
+}
