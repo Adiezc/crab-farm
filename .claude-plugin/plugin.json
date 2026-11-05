@@ -1,11 +1,11 @@
 {
   "name": "crab-farm",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "author": {
     "name": "Adrian Diez Cuadrado",
     "url": "https://github.com/Adiezc"
   },
-  "description": "A tiny pixel farm in a side pane of Claude Code: each step Claude works on gets its own Claude on its own plot, and its subagents are the mini helpers. Purely visual, no model calls, no usage.",
+  "description": "A living pixel farm beside Claude Code: each step Claude works on gets its own named crab on its own plot, every tool call is an errand, subagents are mini helpers, and finished work earns coins that build up the farm. Desktop, VS Code and the terminal; /farm stats tells it anywhere. Purely visual: no model calls, no tools, no network, no usage.",
   "types": "./types/index.d.ts",
   "homepage": "https://github.com/Adiezc/crab-farm",
   "repository": "https://github.com/Adiezc/crab-farm",
@@ -16,5 +16,40 @@
     "pixel-art",
     "fun",
     "claude-code-mod"
-  ]
+  ],
+  "userConfig": {
+    "motion": {
+      "type": "string",
+      "title": "Farm motion",
+      "description": "full, calm (no walking about between jobs), or still (a still picture that changes as the work does)",
+      "default": "full",
+      "options": ["full", "calm", "still"]
+    },
+    "hemisphere": {
+      "type": "string",
+      "title": "Seasons",
+      "description": "auto follows your time zone; north or south sets it",
+      "default": "auto",
+      "options": ["auto", "north", "south"]
+    },
+    "hover": {
+      "type": "boolean",
+      "title": "Hover details",
+      "description": "Show a card when you hover a crab, a plot or a building (desktop app and VS Code)",
+      "default": true
+    },
+    "terminalStyle": {
+      "type": "string",
+      "title": "Terminal farm",
+      "description": "pixels draws the farm in the terminal; text keeps the 1.2 list of steps",
+      "default": "pixels",
+      "options": ["pixels", "text"]
+    },
+    "spinnerWords": {
+      "type": "boolean",
+      "title": "Farm words in the spinner",
+      "description": "Off by default. On, the working spinner says the farm's job (Watering, Tilling) instead of its own word",
+      "default": false
+    }
+  }
 }

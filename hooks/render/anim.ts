@@ -1,11 +1,11 @@
-// The animation recipe (scratchpad/anim/recipe.js, ANIM §4), generalised to any number of poses and props.
+// The animation recipe proven in a browser before it was written, generalised to any number of poses and props.
 // Everything is CSS locked to the wall clock: loops are anchored to the epoch, one-shots to their beat-snapped start,
 // both written as a negative animation-delay, so a freshly generated picture resumes exactly where the last one was.
 // Every move steps on whole world pixels on the shared 125 ms beat. The attributes always hold the present, so with
 // animation off (reduced motion, or a host drawing it still) the picture is still correct.
 
 import { BEAT, beat, SPRITE_SIZES } from '../contracts'
-import type { Actor, Ft, IconId, Leg, Motion, Ms, Pose, Prop, Pt, SpriteId } from '../contracts'
+import type { Actor, Ft, IconId, Leg, Model, Motion, Ms, Pose, Prop, Pt, SpriteId } from '../contracts'
 import { HAT_DY } from '../art'
 import { at } from '../model/jobs'
 import { hash32 } from '../model/rng'
@@ -122,7 +122,7 @@ const PROP_AT: Readonly<Record<Prop, { dx: number; dy: number; turns: boolean }>
   magnifier: { dx: 5, dy: -7, turns: true }, sack: { dx: -3, dy: -16, turns: false }, crate: { dx: -3, dy: -16, turns: false },
   letter: { dx: 4, dy: -5, turns: true }, basket: { dx: -3, dy: -16, turns: false }, book: { dx: 3, dy: -6, turns: true },
   hammer: { dx: 5, dy: -6, turns: true }, lantern: { dx: 6, dy: -4, turns: true }, rod: { dx: 4, dy: -8, turns: true },
-  crank: { dx: 5, dy: -2, turns: true }, umbrella: { dx: -6, dy: -18, turns: false },
+  crank: { dx: 5, dy: -2, turns: true }, umbrella: { dx: -6, dy: -16, turns: false },
 }
 const PROP_B: Partial<Record<Prop, SpriteId>> = { hoe: 'prop_hoe_2', can: 'prop_can_2', hammer: 'prop_hammer_2' }
 
@@ -135,6 +135,42 @@ const propSvg = (use: (id: SpriteId) => string, prop: Prop, isFrozen: boolean): 
     return `<use href="#${use(id)}" x="${dx * HD}" y="${(dy - h) * HD}" width="${w * HD}" height="${h * HD}"${cls ? ` class="${cls}"` : ''}/>`
   }
   return !b || isFrozen ? draw(a, '') : draw(a, 'kA') + draw(b, 'kB')
+}
+
+// ---- the model's hat band ----
+
+/** Each model's colour as a hue, carried on a crab's `hue` as on the minis: the band its hat wears while it drives. */
+export const MODEL_HUE: Readonly<Record<Model, number>> = { haiku: 214, sonnet: 266, opus: 44, fable: 334 }
+/** The minis' bands, light over mid over shadow (art-src palette.py: BLUE, PURPLE, GOLD, PINK). */
+export const MODEL_BAND: Readonly<Record<Model, readonly [string, string, string]>> = {
+  haiku: ['#64a6ff', '#3b7dd8', '#1557b2'], sonnet: ['#a474e0', '#7b4bb7', '#552591'],
+  opus: ['#fbcb46', '#d2a21d', '#6b4a07'], fable: ['#ff98c8', '#e06f9f', '#ba4979'],
+}
+/** The model whose colour is nearest a hue. */
+export const modelOfHue = (hue: number): Model => {
+  const gap = (h: number): number => { const d = Math.abs(mod(hue, 360) - h); return Math.min(d, 360 - d) }
+  return (Object.keys(MODEL_HUE) as Model[]).reduce((best, m) => (gap(MODEL_HUE[m]) < gap(MODEL_HUE[best]) ? m : best), 'opus')
+}
+
+// Where each hat's band runs, in HD px of its 32 × 16 cell: rows of [x, y, w] painted light, mid, shadow. The straw
+// hat's red band, the beanie's cuff, the hood's trim and a ribbon round the flower crown.
+const BANDS: Partial<Record<SpriteId, readonly (readonly [number, number, number])[]>> = {
+  hat_straw: [[9, 9, 14], [9, 10, 14], [10, 11, 12]],
+  hat_beanie: [[5, 12, 22], [5, 13, 22], [5, 14, 22]],
+  hat_hood: [[7, 8, 18], [7, 9, 17]],
+  hat_crown: [[9, 12, 14], [9, 13, 14]],
+}
+
+/** A hat's band in the model's colour, as rects over the hat whose top-left is at world (x, y). */
+export const hatBand = (hat: SpriteId, hue: number, x: number, y: number): string => {
+  const rows = BANDS[hat]
+  if (!rows) return ''
+  const model = modelOfHue(hue)
+  // Gold on straw would vanish: opus's band there is its mid gold between two rows of its shadow.
+  const own = MODEL_BAND[model]
+  const band = model === 'opus' && hat === 'hat_straw' ? [own[2], own[1], own[2]] : own
+  return `<g class="mb">${rows.map(([bx, by, bw], i) =>
+    `<rect x="${n3(x * HD + bx)}" y="${n3(y * HD + by)}" width="${bw}" height="1" fill="${band[i] ?? band[1]}"/>`).join('')}</g>`
 }
 
 // ---- the recipe ----
@@ -269,7 +305,12 @@ export const actorParts = (a: Actor, now: Ms, ft: Ft, motion: Motion, use: (id: 
     const swap = !frozen && fr[0] !== fr[1]
     const cls = isStride(p) ? ['fA', 'fB'] : ['kA', 'kB']
     let inner = spriteUse(use, fr[0], swap ? cls[0] : '') + (swap ? spriteUse(use, fr[1], cls[1]) : '')
-    if (a.hat && a.kind === 'crab') inner += spriteUse(use, a.hat, '', 0, -size(fr[0])[1] + size(a.hat)[1] + (HAT_DY[p] ?? 0))
+    if (a.hat && a.kind === 'crab') {
+      const dy = -size(fr[0])[1] + size(a.hat)[1] + (HAT_DY[p] ?? 0)
+      inner += spriteUse(use, a.hat, '', 0, dy)
+      // The model's band rides on the hat, in the same group, so it moves and breathes with it.
+      if (a.hue !== undefined) inner += hatBand(a.hat, a.hue, -size(a.hat)[0] / 2, dy - size(a.hat)[1])
+    }
     // Everything that is not walking breathes, a one-pixel hop on a slow loop.
     const breathes = !frozen && !isStride(p) && (a.kind === 'crab' || a.kind === 'animal' || a.kind === 'mini')
     if (breathes) inner = `<g class="${breathOf(a)}">${inner}</g>`
@@ -286,7 +327,7 @@ export const actorParts = (a: Actor, now: Ms, ft: Ft, motion: Motion, use: (id: 
     return attrs ? `<g${attrs}>${inner}</g>` : inner
   }).join('')
 
-  const tint = a.hue !== undefined && a.kind !== 'mini' ? ` style="filter:hue-rotate(${Math.round(a.hue)}deg)"` : ''
+  const tint = a.hue !== undefined && a.kind !== 'mini' && a.kind !== 'crab' ? ` style="filter:hue-rotate(${Math.round(a.hue)}deg)"` : ''
   const facer = hasCss('f') || face !== 1
     ? `<g${hasCss('f') ? ` class="${a.id}f"` : ''} transform="scale(${face} 1)"${tint}>${body}${propGroups(true)}</g>`
     : tint ? `<g${tint}>${body}${propGroups(true)}</g>` : body + propGroups(true)
@@ -330,7 +371,8 @@ export const bubbleSvg = (a: Actor, now: Ms, ft: Ft, motion: Motion, use: (id: S
   if (!a.bubble) return ''
   const { pt, pose } = presentOf(a, now, ft, freeze && a.legs.length > 0 ? 'full' : motion)
   const fr = framesOf(a, pose)
-  const top = fr ? size(fr[0])[1] : 18
+  // Over the head: a crab that sits or sleeps is lower, its hat lowered by HAT_DY, and so is its bubble.
+  const top = (fr ? size(fr[0])[1] : 18) - (a.hat && a.kind === 'crab' ? HAT_DY[pose] ?? 0 : 0)
   const isAlert = a.isAsking === true || a.bubble === 'alert' || a.bubble === 'ask'
   const bobs = motion !== 'still' && !freeze && !isAlert
   const frame = bubbleFrame(use, a.bubble, isAlert)

@@ -168,3 +168,11 @@ test('an unknown tool that only reads is inspecting; any other unknown tool tink
   // The exact name comes before the read-only flag.
   expect(classify('Edit', { file_path: 'a' }, true).kind).toBe('till')
 })
+
+test('odd input is an unknown tool, never a throw: no input, no name, or a name every object has', async () => {
+  const none = undefined as unknown as Record<string, unknown>
+  expect(classify('Read', none)).toMatchObject({ kind: 'inspect', isOpen: false })
+  expect(classify('Bash', none)).toMatchObject({ kind: 'water', isOpen: true })
+  expect(classify(undefined as unknown as string, {})).toMatchObject({ kind: 'tinker', isOpen: true })
+  for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) expect(classify(name, {})).toMatchObject({ kind: 'tinker', isOpen: true })
+})

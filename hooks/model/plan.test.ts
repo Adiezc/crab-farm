@@ -214,5 +214,16 @@ test('with up to 24 steps the step in progress is always seated, evicting the la
 test('a plan of one step is named after its prompt, never the app\'s reminders', async () => {
   expect(taskName('<system-reminder>The user said</system-reminder>Lets test crab farm see', 1)).toBe('Lets test crab farm see')
   expect(taskName('', 4)).toBe('task 4')
+  expect(taskName('List the files, then read README.md and src/app.ts: ship 2.0.', 1)).toBe('List the files then read README.md and src/app.ts')
+  expect(taskName('Polish the farm for the 2.0 demo...', 1)).toBe('Polish the farm for the 2.0 demo')
   expect(taskName('one two three four five six seven eight nine', 1)).toBe('one two three four five six seven eight')
+})
+
+test('a tool call with no input or no name says nothing about the plan, and never throws', async () => {
+  const none = undefined as unknown as Record<string, unknown>
+  expect(toEvents(PLAN, none)).toEqual([])
+  expect(toEvents('TodoWrite', none)).toEqual([])
+  expect(toEvents('TaskUpdate', none, { success: true })).toEqual([])
+  expect(toEvents(undefined as unknown as string, {})).toEqual([])
+  expect(toEvents('mcp__ccd_turn__wrap_up', none)).toEqual([{ kind: 'finish' }])
 })

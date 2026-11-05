@@ -22,6 +22,7 @@ SRC = os.path.join(ROOT, 'art-src')
 sys.path[:0] = [HERE, SRC]
 
 import png  # noqa: E402
+import term_art  # noqa: E402
 from legacy import raw as legacy_raw  # noqa: E402
 from pix import Pix, text  # noqa: E402
 
@@ -198,9 +199,9 @@ def _num(v):
 # ---- hooks/art_term.ts ----
 
 def term_bake(cat, art):
-    """STUB: the terminal art, until the baker lands."""
-    src = open(OUT_TERM).read()
-    return {'source': src, 'palette': [0, 0]}
+    """The terminal's art (scripts/term_art.py): the palette, the module's source, and the baked pictures."""
+    baked = term_art.bake(cat, art)
+    return {'source': term_art.ts_source(cat, baked), 'palette': baked['palette'], 'baked': baked}
 
 
 # ---- the contact sheet ----

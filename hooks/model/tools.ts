@@ -120,7 +120,10 @@ const mcp = (tool: string, args: Record<string, unknown>, isReadOnly?: boolean):
 }
 
 export function classify(tool: string, args: Record<string, unknown>, isReadOnly?: boolean): ToolClass {
-  const named = BY_NAME[tool]
+  // Odd input (no name, no input, a name like 'constructor' that every object has) is an unknown tool, never a throw.
+  if (typeof tool !== 'string') tool = ''
+  if (args === null || typeof args !== 'object') args = {}
+  const named = Object.hasOwn(BY_NAME, tool) ? BY_NAME[tool] : undefined
   if (named) return named(args)
   if (tool.startsWith('mcp__')) return mcp(tool, args, isReadOnly)
   if (tool === 'Bash') return bash(str(args.command))

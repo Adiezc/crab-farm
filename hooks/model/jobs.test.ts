@@ -254,3 +254,10 @@ test('a helper done ferries its crates and goes into the barn; a failed one walk
   expect(failed.legs.some(l => l.prop === 'crate')).toBe(false)
   expect(failed.legs[failed.legs.length - 1]?.to).toEqual(BARN_IN)
 })
+
+test('a crab already on its way out with nothing left to fold starts a new job from its anchor, not the corner', async () => {
+  const gone = crab({ anchor: { ft: T0, pt: BARN_IN }, leavingAt: T0 })
+  expect(timeline(gone, HOME, route, true)).toEqual([])
+  const c = enqueue(gone, job('leave', T0 + 10, BARN_IN), T0 + 10, HOME, route)
+  expect(c.anchor.pt).toEqual(BARN_IN)
+})

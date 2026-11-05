@@ -43,7 +43,8 @@ const FILLER = new Set('a an and the to of on in for with it its is be me my we 
 
 /** A step's name as its sign spells it: whole words that fit, filler left out unless nothing else is left. */
 export const signName = (name: string, max = SIGN_TEXT_W): string => {
-  const words = fontText(name).split(/\s+/).filter(Boolean)
+  // The font has no _ or :, so they part words (snake_case, a: b) rather than run them together.
+  const words = fontText(name.replace(/[_:]/g, ' ')).split(/\s+/).filter(Boolean)
   const kept = words.filter(w => !FILLER.has(w.toLowerCase()))
   const pick = kept.length ? kept : words
   let out = ''
@@ -117,6 +118,52 @@ export const signSvg = (sign: Sign, plot: { x: number; y: number; w: number; h: 
     rect(x + 0.5, y + 0.5, w - 1, h - 1, sign.isCurrent ? WOOD.gold : WOOD.plank) +
     rect(x + 0.5, y + 0.5, w - 1, 0.5, sign.isCurrent ? WOOD.goldLight : WOOD.light) +
     (sign.isCurrent ? textUse(x + 2.5, y + 1.5, text, WOOD.edge) : textUse(x + 2.5, y + 1.5, text, WOOD.cream, WOOD.edge))
+}
+
+// ---- the project's sign by the gate ----
+
+/** The plot a Sign names when it is the project's sign by the gate, not a step's. */
+export const PROJECT_PLOT = -1
+/** How wide the project's name may run, in world px: nine letters. */
+export const PROJECT_TEXT_W = 35
+/** The sign's right edge and the ground its posts stand on: just past the south lane's end, clear of the mailbox. */
+const GATE_SIGN = { right: 157, ground: 218 } as const
+
+/**
+ * A folder name as the sign spells it: its words (split at spaces, dashes, underscores and dots) that fit, whole, as
+ * a step's sign keeps them; a first word too long for the sign is cut. A name is all words, so none is filler.
+ */
+export const projectName = (name: string, max = PROJECT_TEXT_W): string => {
+  const words = fontText(name.replace(/[-_.]+/g, ' ')).split(/\s+/).filter(Boolean)
+  let out = ''
+  for (const w of words) {
+    const next = out ? `${out} ${w}` : w
+    if (textWidth(next) > max) break
+    out = next
+  }
+  return out || (words[0] ?? '').slice(0, Math.floor((max + 1) / 4))
+}
+
+/** The project sign's plank in world px (its posts stand below it, to the ground), and its words; none for no name. */
+export const projectSign = (name: string): { x: number; y: number; w: number; h: number; text: string } | undefined => {
+  const text = projectName(name)
+  if (!text.trim()) return undefined
+  const w = textWidth(text) + 5
+  const h = 8
+  return { x: GATE_SIGN.right - w, y: GATE_SIGN.ground - h - 3, w, h, text }
+}
+
+/** The project's name on a plank on two posts by the gate, painted as the plot signs are. */
+export const projectSignSvg = (name: string): string => {
+  const b = projectSign(name)
+  if (!b) return ''
+  const { x, y, w, h, text } = b
+  const posts = [x + 2, x + w - 3].map(px => rect(px, y + h, 1, 3, WOOD.edge) + rect(px + 1, y + h, 0.5, 3, 'rgba(20,30,10,.3)')).join('')
+  return rect(x + 1, y + h + 2.5, w - 1, 0.5, 'rgba(20,30,10,.3)') + posts +
+    rect(x, y, w, h, WOOD.edge) +
+    rect(x + 0.5, y + 0.5, w - 1, h - 1, WOOD.plank) +
+    rect(x + 0.5, y + 0.5, w - 1, 0.5, WOOD.light) +
+    textUse(x + 2.5, y + 1.5, text, WOOD.cream, WOOD.edge)
 }
 
 /** Where the board hangs: its right edge and top in world px. The narrow panel's crop hangs it inside the crop. */

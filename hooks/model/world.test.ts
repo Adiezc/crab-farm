@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { BEAT } from '../contracts'
 import type { JobKind, LandmarkId, Pt, ResolveFn, RouteFn } from '../contracts'
-import { at, timeline } from './jobs'
+import { CHORES, at, timeline } from './jobs'
 import { home as realHome, resolve as realResolve, route as realRoute, YARD as REAL_YARD } from './layout'
 import { mulberry32 } from './rng'
 import { RESIDENT, emptyLive, farmTime, reduce, shownCoins } from './world'
@@ -106,10 +106,11 @@ test('a full session: prompt, plan, calls, a helper, an ask, an answer, and the 
   // A list with work left carries on into the next turn.
   expect(l.plan.steps.map(s => s.status)).toEqual(['completed', 'in_progress', 'pending'])
   l = run(l, T0 + 100_000, 1000, call('mcp__ccd_turn__wrap_up', { recap: 'done' }), { kind: 'turnEnd', reason: 'answer' })
-  // Rework had a call (the advance), so it pays; Ship never started, so it brings nothing.
+  // Rework had a call (the advance), so it pays; Ship never started, so it brings nothing. Five main-loop calls in
+  // all (the list, ls, npm test, the advance, the wrap-up: results and spawns are not calls), so 5 + 10 + 10 coins.
   expect(l.plan.steps.map(s => [s.status, s.paid])).toEqual([['completed', true], ['completed', true], ['completed', undefined]])
-  expect(l.earn).toMatchObject({ coins: 26, calls: 6, harvests: 2 })
-  expect(shownCoins(l, farmTime(l, T0 + 10_000_000))).toBe(26)
+  expect(l.earn).toMatchObject({ coins: 25, calls: 5, harvests: 2 })
+  expect(shownCoins(l, farmTime(l, T0 + 10_000_000))).toBe(25)
 
   // A later prompt with no list gets its own crab at plot 0; the finished steps' crabs go into the barn, the helper
   // still running comes along.
@@ -271,6 +272,10 @@ test('the context compacting sends the working crab to the compost heap', async 
   l = reduce(l, { kind: 'compact' }, T0 + 1000, ctx)
   expect(l.crabs[0]?.jobs.map(j => j.kind)).toEqual(['compost'])
   expect(l.fx.map(f => f.kind)).toEqual(['compost'])
+  // One barrow at a time: compacting again while it is still out adds nothing.
+  expect(reduce(l, { kind: 'compact' }, T0 + 1500, ctx)).toBe(l)
+  // Once it is back, the next compaction wheels another.
+  expect(reduce(l, { kind: 'compact' }, T0 + 120_000, ctx).crabs[0]?.jobs.map(j => j.kind)).toEqual(['compost'])
 })
 
 test('a clear starts the farm again', async () => {
@@ -308,6 +313,110 @@ test('it runs on the real farm\'s routes and landmarks', async () => {
   expect(l.earn.harvests).toBe(2)
 })
 
+test('odd input never throws: no args, no tool, unknown tools, an unknown task id, an end with no turn, a burst of calls', async () => {
+  let l = emptyLive(T0, home(0))
+  // An end before any turn only notes how it ended.
+  l = reduce(l, { kind: 'turnEnd', reason: 'answer' }, T0, ctx)
+  expect(l.plan.steps).toEqual([])
+  const odd = [
+    { kind: 'turnStart' },
+    { kind: 'call', tool: 'Read', useId: 'a' },
+    { kind: 'call', tool: 'Mystery', args: null, useId: 'b' },
+    { kind: 'call', args: [1, 2], useId: 'c' },
+    { kind: 'result', tool: 'Mystery', useId: 'b', isError: false },
+    { kind: 'result', tool: 'TaskUpdate', useId: 'd', result: { success: true }, isError: false, args: { taskId: '77', status: 'in_progress' } },
+    { kind: 'spawn' },
+    { kind: 'agentEnd', agentId: 'nobody', reason: 'answer' },
+    { kind: 'whatever' },
+    null,
+  ] as unknown as FarmEvent[]
+  odd.forEach((ev, i) => { l = reduce(l, ev, T0 + 1000 * (i + 1), ctx) })
+  // A TaskUpdate for a task the farm never saw is a step named after it; the prompt's crab works it.
+  expect(l.plan.steps.map(s => [s.id, s.name, s.status])).toEqual([['k:77', 'task 77', 'in_progress']])
+  expect(live(l).map(c => [c.stepId, c.plot])).toEqual([['k:77', 0]])
+  expect(l.helpers.map(h => [h.model, h.label])).toEqual([['opus', '']])
+  // Two hundred calls at once: never more than three errands a crab, and the turn's end closes every one.
+  const tools: [string, Record<string, unknown>][] = [['Bash', { command: 'ls' }], ['Read', {}], ['WebFetch', {}], ['Edit', {}], ['mcp__x__make', {}], ['Bash', { command: 'npm test' }]]
+  for (let i = 0; i < 200; i++) {
+    const [tool, args] = tools[i % tools.length] as [string, Record<string, unknown>]
+    l = reduce(l, call(tool, args), T0 + 20_000 + i, ctx)
+  }
+  expect(l.crabs.every(c => c.jobs.filter(j => !CHORES.has(j.kind)).length <= 3)).toBe(true)
+  // The prompt's two calls (Read with no input, Mystery) went to the task that absorbed it; the one with no tool is nothing.
+  expect(l.plan.steps[0]?.calls).toBe(202)
+  l = reduce(l, { kind: 'turnEnd', reason: 'aborted' }, T0 + 30_000, ctx)
+  expect(l.crabs.every(c => c.jobs.every(j => !j.isOpen || j.until !== undefined))).toBe(true)
+})
+
+test('a turn that starts before the last one ended: what it left running stops, and its ask is answered', async () => {
+  let l = run(emptyLive(T0, home(0)), T0, 1000,
+    { kind: 'turnStart', turnId: '1', text: 'x' }, call('WebFetch', { url: 'https://a.b' }),
+    { kind: 'spawn', model: 'haiku', label: 'no id' }, { kind: 'ask', tool: 'WebFetch' })
+  l = reduce(l, { kind: 'turnStart', turnId: '2', text: 'y' }, T0 + 60_000, ctx)
+  expect(l.asking).toBeUndefined()
+  expect(l.clock).toEqual({ pausedMs: 57_000 })
+  expect(l.crabs.every(c => c.jobs.every(j => !j.isOpen || j.until !== undefined))).toBe(true)
+  expect(l.helpers.map(h => h.endedAt !== undefined)).toEqual([true])
+  expect(l.turn).toMatchObject({ isWorking: true, id: '2' })
+  // The same turn announced again changes nothing, and stops nothing.
+  const m = reduce(l, call('Bash', { command: 'npm test' }), T0 + 61_000, ctx)
+  expect(reduce(m, { kind: 'turnStart', turnId: '2', text: 'y' }, T0 + 62_000, ctx)).toBe(m)
+})
+
+test('only the call that asked clears the freeze: a Read run beside it, or a subagent\'s call, leave the farm still', async () => {
+  let l = run(emptyLive(T0, home(0)), T0, 100,
+    { kind: 'turnStart', turnId: '1', text: 'x' }, call('Bash', { command: 'rm -rf build' }), call('Read', { file_path: 'a.ts' }),
+    { kind: 'ask', tool: 'Bash' })
+  expect(reduce(l, result('Read'), T0 + 5000, ctx)).toBe(l)
+  expect(reduce(l, result('Bash', {}, { agentId: 'sub' }), T0 + 6000, ctx)).toBe(l)
+  l = reduce(l, result('Bash'), T0 + 9300, ctx)
+  expect(l.asking).toBeUndefined()
+  expect(l.clock).toEqual({ pausedMs: 9000 })
+})
+
+test('the project\'s sign and the model\'s hat: set by meta or the turn, kept through a clear, the same when unchanged', async () => {
+  let l = reduce(emptyLive(T0, home(0)), { kind: 'meta', project: ' crab-farm ', model: 'claude-opus-5-5' }, T0, ctx)
+  expect([l.project, l.model]).toEqual(['crab-farm', 'opus'])
+  expect(reduce(l, { kind: 'meta', project: 'crab-farm', model: 'opus' }, T0 + 1, ctx)).toBe(l)
+  expect(reduce(l, { kind: 'meta' }, T0 + 1, ctx)).toBe(l)
+  l = reduce(l, { kind: 'turnStart', turnId: '1', text: 'x', model: 'claude-sonnet-5-5' }, T0 + 1000, ctx)
+  expect(l.model).toBe('sonnet')
+  l = run(l, T0 + 2000, 1000, call('Read'), { kind: 'ask', tool: 'Read' }, { kind: 'askClear' }, { kind: 'turnEnd', reason: 'answer' })
+  expect([l.project, l.model]).toEqual(['crab-farm', 'sonnet'])
+  l = reduce(l, { kind: 'clear' }, T0 + 9000, ctx)
+  expect([l.project, l.model, l.plan.steps.length]).toEqual(['crab-farm', 'sonnet', 0])
+  expect(reduce(l, { kind: 'meta', project: '' }, T0 + 10_000, ctx).project).toBeUndefined()
+})
+
+test('a finished step whose plot goes to the next one still picks its row and hauls its crate, then leaves', async () => {
+  const names = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+  let l = run(emptyLive(T0, home(0)), T0, 1000,
+    { kind: 'turnStart', turnId: '1', text: 'x' },
+    call(PLAN, list(...names.map((n, i): [string, string] => [n, i === 0 ? 'in_progress' : 'pending']))),
+    call('Read', { file_path: 'a.ts' }))
+  expect(l.plan.seats).toEqual(names.slice(0, 6).map(n => `n:0:${n}`))
+  l = reduce(l, call(PLAN, { advance: true }), T0 + 10_000, ctx)
+  expect(l.plan.seats[0]).toBe('n:0:G')
+  const a = l.crabs.find(c => c.stepId === 'n:0:A')
+  expect(a?.leavingAt).toBeDefined()
+  expect(a?.jobs.slice(-3).map(j => j.kind)).toEqual(['harvest', 'haul', 'leave'])
+  expect(l.fx.find(f => f.kind === 'coins')).toMatchObject({ at: YARD, value: 13 })
+  expect(crabOf(l, 'n:0:G')?.jobs.map(j => j.kind)).toEqual(['arrive'])
+})
+
+test('a step another source names again keeps its crab: no compost, no crab walking out of the barn', async () => {
+  let l = run(emptyLive(T0, home(0)), T0, 1000,
+    { kind: 'turnStart', turnId: '1', text: 'x' },
+    call('TaskCreate', { subject: 'Dig' }), result('TaskCreate', { task: { id: '1', subject: 'Dig' } }, { args: { subject: 'Dig' } }))
+  expect(live(l).map(c => [c.stepId, c.plot])).toEqual([['k:1', 0]])
+  l = reduce(l, call('TodoWrite', { todos: [{ content: 'Dig', status: 'in_progress', activeForm: 'Digging' }, { content: 'Plant', status: 'pending', activeForm: 'Planting' }] }), T0 + 5000, ctx)
+  expect(l.plan.source).toBe('todo')
+  expect(l.crabs.filter(c => c.leavingAt !== undefined)).toEqual([])
+  expect(crabOf(l, 'n:0:Dig')?.plot).toBe(0)
+  expect(crabOf(l, 'n:0:Dig')?.jobs.map(j => j.kind)).toEqual(['stake'])
+  expect(crabOf(l, 'n:0:Plant')?.jobs.map(j => j.kind)).toEqual(['arrive'])
+})
+
 // ---- the same-reference property, on random worlds ----
 
 const canon = (v: unknown): string => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x))
@@ -325,6 +434,7 @@ const randomEvent = (r: () => number, l: Live): FarmEvent => {
   if (roll < 0.28) return { kind: 'agentEnd', agentId: pick(['a1', 'a2', 'a3', 'nobody']), reason: pick(['answer', 'error']) }
   if (roll < 0.30) return { kind: 'compact' }
   if (roll < 0.305) return { kind: 'clear' }
+  if (roll < 0.31) return { kind: 'meta', project: pick(['crab-farm', 'barn']), model: pick(['claude-opus-5-5', 'sonnet']) }
   const sub = r() < 0.1 ? { agentId: 'a1' } : {}
   if (roll < 0.40) {
     const n = 1 + Math.floor(r() * 8)
@@ -351,31 +461,48 @@ test('same reference when nothing changes, for every event on random worlds; and
   let checks = 0
   let unchanged = 0
   for (let w = 0; w < 120; w++) {
-    let l = emptyLive(T0, home(0))
+    let l: Live = { ...emptyLive(T0, home(0)), project: 'crab-farm', model: 'opus' }
     let now = T0
+    let prior = canon(l)
     for (let e = 0; e < 60; e++) {
       now += Math.floor(r() * 5000)
       const ev = randomEvent(r, l)
       const next = reduce(l, ev, now, ctx)
-      const isSame = canon(next) === canon(l)
+      const is = next === l ? prior : canon(next)
+      const isSame = is === prior
+      prior = is
       if (isSame) { expect(next).toBe(l); unchanged++ }
       expect(next === l).toBe(next.rev === l.rev)
+      // The project's sign and the model's hat survive every event; only a meta event changes them.
+      if (ev.kind !== 'meta') expect([next.project, next.model]).toEqual([l.project, l.model])
       // Every seated step has its crab on its plot, one crab a plot; the farmhand keeps an empty farm.
       const staying = next.crabs.filter(c => c.leavingAt === undefined)
-      next.plan.seats.forEach((id, plot) => { if (id !== null) expect(staying.filter(c => c.stepId === id && c.plot === plot).length).toBe(1) })
+      expect(next.plan.seats.every((id, plot) => id === null || staying.filter(c => c.stepId === id && c.plot === plot).length === 1)).toBe(true)
       expect(new Set(staying.map(c => c.plot)).size).toBe(staying.length)
       if (next.plan.steps.length === 0) expect(staying.length).toBeGreaterThan(0)
       expect(next.helpers.length).toBeLessThan(25)
       expect(next.fx.length).toBeLessThan(9)
-      // Nobody already on the farm moves at the moment of the event (a clear starts a new farm).
+      // Nothing grows without bound: at most three tool jobs a crab, and a few chores.
+      expect(next.crabs.every(c => c.jobs.filter(j => !CHORES.has(j.kind)).length <= 3 && c.jobs.length < 10)).toBe(true)
+      // A turn's end leaves nothing frozen and nothing holding.
+      if (ev.kind === 'turnEnd') {
+        expect(next.asking).toBeUndefined()
+        expect(next.crabs.every(c => c.jobs.every(j => !j.isOpen || j.until !== undefined))).toBe(true)
+      }
+      // Nobody already on the farm moves at the moment of the event (a clear starts a new farm). A crab is the one it
+      // was if it stays on its plot: the same leaver (its walk into the barn is one job), or a stayer that kept its
+      // step, handed over (same anchor) or set off. A crab walking out of the barn is new, even while an old one of the
+      // same step is still walking in.
       if (ev.kind !== 'clear') {
         const ft = farmTime(l, now)
+        const leave = (c: Crab) => c.jobs.find(j => j.kind === 'leave')?.n
         for (const c of next.crabs) {
-          const was = l.crabs.find(o => o.plot === c.plot && (o.stepId === c.stepId || canon(o.anchor) === canon(c.anchor)) && o.leavingAt === c.leavingAt || o.plot === c.plot && o.stepId === c.stepId)
+          const was = l.crabs.find(o => o.plot === c.plot && (o.leavingAt !== undefined
+            ? o.stepId === c.stepId && leave(o) === leave(c)
+            : o.stepId === c.stepId || c.leavingAt === undefined && canon(o.anchor) === canon(c.anchor)))
           if (!was) continue
           const a = at(timeline(c, home(c.plot), route, true), ft).pt, b = at(timeline(was, home(was.plot), route, true), ft).pt
-          if (a.x !== b.x || a.y !== b.y) console.log(JSON.stringify({ ev, ft, was, c }))
-          expect(a).toEqual(b)
+          if (a.x !== b.x || a.y !== b.y) expect(a).toEqual(b)
           checks++
         }
       }

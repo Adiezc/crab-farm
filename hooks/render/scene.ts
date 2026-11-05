@@ -15,7 +15,9 @@ import { BUILD_ORDER, PADS, PLOTS, PLOT_H, PLOT_W, YARD, home, route } from '../
 import { eventsAt, hemisphereOf, localTime, seasonOf, sky, weatherOf } from '../model/clock'
 import { ambientActors, idleActor } from '../model/ambient'
 import { LADDER, nextBuild, owned } from '../model/progress'
-import { boardBox } from './text'
+import { crabName, crabNames, RESIDENT } from '../model/names'
+import { MODEL_HUE } from './anim'
+import { PROJECT_PLOT, boardBox, projectSign } from './text'
 
 type Opts = { motion: Motion; hemisphere: 'auto' | 'north' | 'south'; tz?: string }
 
@@ -257,6 +259,8 @@ const helperActor = (h: Helper, i: number, ft: Ft, motion: Motion): Actor | unde
 
 // ---- hover cards ----
 
+/** The most characters a card's line holds: the widest card still fits the narrow panel's crop. */
+const CARD = 44
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s)
 const up = (s: string): string => s.toUpperCase()
 const hhmm = (ms: Ms, tz?: string): string => {
@@ -283,21 +287,26 @@ const dayMonth = (ms: Ms, tz?: string): string => {
   return `${Number(d[2] ?? 1)} ${MONTHS[Number(d[1] ?? 1) - 1] ?? ''}`
 }
 /** What each build does for the crabs, on its card. */
+/** A tool as the farm names it: an MCP tool by its server, the app's own plan tools as `plan`. */
+export const toolName = (tool: string): string =>
+  /^mcp__ccd_turn__/.test(tool) ? 'plan' : tool.startsWith('mcp__') ? tool.split('__')[1] ?? tool : tool
+
 const ROLE: Partial<Record<UnlockId, string>> = {
   scarecrow: 'keeps the crows off', coop: 'hens and eggs', barrel: 'nearer water for bash', mailbox: 'web fetches go here',
   bench: 'lunch and a sit', cat: 'naps in the sun', flowers: 'butterflies and bees', hive: 'bees and honey',
   well: 'bash fetches water here', jetty: 'fishing', windmill: 'builds run the mill', orchard: 'saplings, then fruit',
 }
 
-const plotZone = (step: Step, index: number, total: number, crab: Crab | undefined, helpers: Helper[], state: CrabState, tz?: string): Zone => {
+const plotZone = (step: Step, index: number, total: number, crab: Crab | undefined, helpers: Helper[], state: CrabState, tz?: string, name?: string): Zone => {
   const p = plotOf(crab?.plot ?? 0)
-  const lines = [clip(up(`${index + 1}/${total} ${step.name}`), 38)]
-  lines.push(clip(up(step.doing && state === 'working' ? `${STATE_WORD[state]} · ${step.doing}` : STATE_WORD[state]), 38))
+  // The crab's name first: PINCHY · 3/6 REWORK THE PLOTS.
+  const lines = [clip(up(`${name ? `${name} · ` : ''}${index + 1}/${total} ${step.name}`), CARD)]
+  lines.push(clip(up(step.doing && state === 'working' ? `${STATE_WORD[state]} · ${step.doing}` : STATE_WORD[state]), CARD))
   const job = crab ? jobNow(crab) : undefined
   if (job && (state === 'working' || state === 'asking')) {
-    const tool = `${job.tool.startsWith('mcp__') ? job.tool.split('__')[1] ?? job.tool : job.tool}${job.count > 1 ? ` ×${job.count}` : ''}${job.note ? `: ${job.note}` : ''}`
-    lines.push(clip(up(`now: ${DOING[job.kind]} (${tool})`), 38))
-  } else if (job && PLACE[job.land]) lines.push(clip(up(`last: ${DOING[job.kind]} at ${PLACE[job.land]}`), 38))
+    const tool = `${toolName(job.tool)}${job.count > 1 ? ` ×${job.count}` : ''}${job.note ? `: ${job.note}` : ''}`
+    lines.push(clip(up(`now: ${DOING[job.kind]} (${tool})`), CARD))
+  } else if (job && PLACE[job.land]) lines.push(clip(up(`last: ${DOING[job.kind]} at ${PLACE[job.land]}`), CARD))
   const parts: string[] = []
   if (step.startedAt !== undefined) {
     parts.push(`since ${hhmm(step.startedAt, tz)}`)
@@ -306,13 +315,13 @@ const plotZone = (step: Step, index: number, total: number, crab: Crab | undefin
   }
   parts.push(`${step.calls} call${step.calls === 1 ? '' : 's'}`)
   if (helpers.length) parts.push(`${helpers.length} helper${helpers.length === 1 ? '' : 's'}`)
-  lines.push(clip(up(parts.join(' · ')), 38))
+  lines.push(clip(up(parts.join(' · ')), CARD))
   return { id: `p${crab?.plot ?? 0}`, rect: [p.x - 16, p.y - 8, p.w + 18, p.h + 19], lines: lines.slice(0, 4) }
 }
 
 const helperZone = (plot: number, helpers: Helper[], tz?: string): Zone => {
   const p = plotOf(plot)
-  const lines = helpers.slice(0, 4).map(h => clip(up(`${MODEL_OF(h.model)} · ${h.label} · since ${hhmm(h.since, tz)}`), 38))
+  const lines = helpers.slice(0, 4).map(h => clip(up(`${MODEL_OF(h.model)} · ${h.label} · since ${hhmm(h.since, tz)}`), CARD))
   return { id: `m${plot}`, rect: [p.x + 2, p.y - 9, p.w - 2, 9], lines }
 }
 
@@ -341,6 +350,9 @@ export function sceneOf(live: Live, bank: Bank, now: Ms, opts: Opts & { surface:
   const hat = hatOf(season, weather)
   const isAsking = live.asking !== undefined
   const isStopped = !live.turn.isWorking && (live.turn.outcome === 'aborted' || live.turn.outcome === 'error')
+  // Every crab's name, from the farm's seed: the farmhand's own, each step's crab's by its step id, never shared.
+  const names = new Map(crabNames(bank.seed, plan.steps.map(s => s.id)).map((n, i): [string, string] => [plan.steps[i]?.id ?? '', n]))
+  names.set(RESIDENT, crabName(bank.seed, RESIDENT))
 
   const statics: Static[] = []
   const actors: Actor[] = []
@@ -358,7 +370,7 @@ export function sceneOf(live: Live, bank: Bank, now: Ms, opts: Opts & { surface:
 
   // The crabs, or the resident farmhand when there is no plan.
   const crabs: Crab[] = live.crabs.length || plan.steps.length ? live.crabs
-    : [{ stepId: 'resident', plot: 0, anchor: { ft: 0, pt: home(0) }, jobs: [], restSince: 0 }]
+    : [{ stepId: RESIDENT, plot: 0, anchor: { ft: 0, pt: home(0) }, jobs: [], restSince: 0 }]
   const idleIds = crabs.filter(c => isIdle(c, stepById.get(c.stepId), live, ft)).map(c => c.stepId)
   const travellers = motion === 'full' ? idleIds.slice(0, 2) : []
   const running = live.helpers.filter(h => h.endedAt === undefined)
@@ -388,9 +400,12 @@ export function sceneOf(live: Live, bank: Bank, now: Ms, opts: Opts & { surface:
       else if (state === 'waiting' && (isCurrent || !current)) bubble = 'ask'
       // Rain: a crab out on an errand carries an umbrella.
       if (weather?.kind === 'rain') legs = legs.map(l => (l.pose === 'walk' && !l.prop ? { ...l, prop: 'umbrella' } : l))
+      // The crab the model is driving wears its colour on its hat band: hue is the model's colour, as on the minis.
+      const isDriven = live.model !== undefined && (state === 'working' || state === 'thinking' || state === 'asking')
       actor = {
         id, kind: 'crab', clock: 'farm', frames: CRAB_FRAMES, hat, legs,
         ...(bubble ? { bubble } : {}), ...(state === 'asking' ? { isAsking: true } : {}),
+        ...(isDriven && live.model ? { hue: MODEL_HUE[live.model] } : {}),
       }
       // The laptop by its home: typing along while the turn works, dark while it thinks or after a stop.
       if (step?.status === 'in_progress') {
@@ -422,8 +437,20 @@ export function sceneOf(live: Live, bank: Bank, now: Ms, opts: Opts & { surface:
     const crab = live.crabs.find(c => c.stepId === step.id)
     const hs = running.filter(h => h.stepId === step.id)
     zones.push(plotZone(step, plan.steps.indexOf(step), total, crab ?? { stepId: step.id, plot, anchor: { ft: 0, pt: home(plot) }, jobs: [], restSince: 0 },
-      hs, cardState(step, live, step.id === current?.id), opts.tz))
+      hs, cardState(step, live, step.id === current?.id), opts.tz, names.get(step.id)))
     if (hs.length) zones.push(helperZone(plot, hs, opts.tz))
+  }
+  if (!plan.steps.length) {
+    // The farmhand's card, on the first plot where it lives.
+    const p = plotOf(0)
+    const word = isAsking ? 'needs your OK' : live.turn.isWorking ? 'working' : 'waiting for a prompt'
+    zones.push({ id: 'r0', rect: [p.x - 16, p.y - 8, p.w + 18, p.h + 19], lines: [clip(up(`${names.get(RESIDENT) ?? ''} · the farmhand`), CARD), up(word)] })
+  }
+  // The project's sign by the gate, and its card with the folder's whole name.
+  const sign = live.project ? projectSign(live.project) : undefined
+  if (sign && live.project) {
+    signs.push({ plot: PROJECT_PLOT, text: live.project, isCurrent: false })
+    zones.push({ id: 'proj', rect: [sign.x, sign.y, sign.w, sign.h + 2], lines: [clip(up(live.project), CARD), 'THE PROJECT'] })
   }
   for (const id of BUILD_ORDER.slice(0, count)) {
     const [x, y, w, h] = PADS[id]
@@ -464,12 +491,18 @@ const boardOf = (live: Live, coins: number, next: ReturnType<typeof nextBuild>):
   }
 }
 
+/** A count and its noun, one or many: 1 CRATE, 2 CRATES. */
+const count = (n: number, one: string, many = `${one}S`): string => `${commas(n)} ${n === 1 ? one : many}`
+
+/** Days farmed as every view says it: the stored days, and today once this session has made a call. */
+export const daysFarmed = (live: Live, bank: Bank): number => Math.max(bank.days, live.earn.calls > 0 ? 1 : 0)
+
 const almanac = (live: Live, bank: Bank, tz?: string): string[] => {
   const t = bank.others
   return [
-    `${commas(t.coins + live.earn.shown)} COINS · ${commas(t.harvests + live.earn.harvests)} HARVESTS`,
-    `${commas(t.crates + live.earn.crates)} CRATES · ${commas(t.helpers + live.earn.helpers)} HELPERS`,
-    `${commas(bank.days)} DAYS FARMED · ${commas(t.golden + live.earn.golden)} GOLDEN`,
+    `${count(t.coins + live.earn.shown, 'COIN')} · ${count(t.harvests + live.earn.harvests, 'HARVEST')}`,
+    `${count(t.crates + live.earn.crates, 'CRATE')} · ${count(t.helpers + live.earn.helpers, 'HELPER')}`,
+    `${count(daysFarmed(live, bank), 'DAY FARMED', 'DAYS FARMED')} · ${commas(t.golden + live.earn.golden)} GOLDEN`,
     `FARM BORN ${dayMonth(bank.bornAt, tz)}`,
   ]
 }
@@ -483,7 +516,7 @@ const altOf = (live: Live, coins: number, next: ReturnType<typeof nextBuild>, cu
     const crab = live.crabs.find(c => c.stepId === current.id)
     const job = crab ? jobNow(crab) : undefined
     const doing = live.asking ? `needs your OK (${live.asking.tool})`
-      : live.turn.isWorking ? (job ? `${DOING[job.kind]} (${job.tool.startsWith('mcp__') ? job.tool.split('__')[1] ?? job.tool : job.tool})` : 'thinking')
+      : live.turn.isWorking ? (job ? `${DOING[job.kind]} (${toolName(job.tool)})` : 'thinking')
         : 'your move'
     head += `, now "${current.name}", ${doing}`
   } else if (!total) head += live.turn.isWorking ? ', working' : ', waiting for a prompt'

@@ -9,8 +9,8 @@ import type { Fx } from '../../types'
 import { ATLAS, ATLAS_SIZE, BG, FG, SYMBOLS, WORLD } from '../art'
 import { moonPhase } from '../model/clock'
 import { PLOTS, PLOT_H, PLOT_W } from '../model/layout'
-import { HD, actorParts, bubbleSvg, loopDelay, phaseVars, placeUse, presentOf, sharedCss } from './anim'
-import { BOARD_AT, GLYPHS, boardSvg, glyphDefs, glyphId, signSvg, textUse } from './text'
+import { HD, actorParts, actorTime, bubbleSvg, loopDelay, phaseVars, placeUse, presentOf, sharedCss, stillState } from './anim'
+import { BOARD_AT, GLYPHS, PROJECT_PLOT, boardSvg, glyphDefs, glyphId, projectSign, projectSignSvg, signSvg, textUse } from './text'
 import type { BoardAnchor } from './text'
 import { FX_MS } from './scene'
 
@@ -84,7 +84,7 @@ const weatherSvg = (dl: DrawList, isLive: boolean, css: string[]): { defs: strin
         `<rect class="wf" x="-32" y="-32" width="${VW + 64}" height="${VH + 64}" fill="url(#wp)"/>`,
     }
   }
-  if (w.kind === 'fog') return { defs: '<linearGradient id="fg" x2="0" y2="1"><stop offset="0" stop-color="#eef2f0" stop-opacity=".55"/><stop offset="1" stop-color="#eef2f0" stop-opacity=".18"/></linearGradient>', svg: `<rect width="${VW}" height="${VH}" fill="url(#fg)"/>` }
+  if (w.kind === 'fog') return { defs: '<linearGradient id="fg" x2="0" y2="1"><stop offset="0" stop-color="#eef2f0" stop-opacity=".35"/><stop offset="1" stop-color="#eef2f0" stop-opacity=".1"/></linearGradient>', svg: `<rect width="${VW}" height="${VH}" fill="url(#fg)"/>` }
   if (w.kind === 'cloudy') {
     // Two cloud shadows cross the field in 40 s, every 3½ minutes, a minute and a half apart.
     if (isLive) css.push(`@keyframes cs{0%{transform:translateX(-120px)}19%,100%{transform:translateX(${VW + 120}px)}}` +
@@ -145,6 +145,14 @@ const inPlace = (a: Actor, dl: DrawList): Actor => {
   return { ...rest, frames, legs: [], still: p.pt }
 }
 
+/** Whether an actor stands wholly outside the world at the picture's moment. */
+const isAway = (a: Actor, dl: DrawList): boolean => {
+  const p = presentOf(a, dl.now, dl.ft, dl.motion)
+  const fr = a.frames[p.pose] ?? a.frames.stand ?? Object.values(a.frames)[0]
+  const [w, h] = fr ? SPRITE_SIZES[fr[0]] : [0, 0]
+  return p.pt.x + w / 2 <= 0 || p.pt.x - w / 2 >= WORLD.W || p.pt.y <= 0 || p.pt.y - h >= WORLD.H
+}
+
 /** The plot a helper works on, from its id (`h<plot><n>`). */
 const helperPlot = (a: Actor): number => (a.kind === 'mini' && a.id[0] === 'h' ? Number(a.id[1] ?? 0) : -1)
 
@@ -154,7 +162,9 @@ type Drawn = { actors: Actor[]; extra: Map<number, number>; motion: Motion; star
 const detail = (dl: DrawList, lod: number): Drawn => {
   let actors = dl.actors
   const extra = new Map<number, number>()
-  if (lod >= 1) actors = actors.filter(a => a.kind !== 'event')
+  // Level 1 drops the rare events, and the critters out of sight just now: a flock crosses for 5 s in 450, a fish
+  // jumps for a moment in 67. Each costs a kilobyte of CSS for the few seconds it shows.
+  if (lod >= 1) actors = actors.filter(a => a.kind !== 'event' && !(a.kind === 'critter' && a.loop && isAway(a, dl)))
   if (lod >= 2) actors = actors.map(a => ((a.kind === 'critter' || a.kind === 'animal') && isMoving(a) ? inPlace(a, dl) : a))
   if (lod >= 3) {
     actors = actors.filter(a => !(a.kind === 'mini' && !a.loop && helperPlot(a) >= 0 && a.legs.some(l => l.pose === 'carry')))
@@ -196,6 +206,17 @@ const build = (dl: DrawList, lod: number, narrow: boolean): string => {
 
   // Statics, in place.
   for (const st of dl.statics) items.push({ y: st.at.y + (SPRITE_SIZES[st.sprite]?.[1] ?? 0), svg: staticSvg(st, use, isLive, dl, css) })
+  // By day the signs stand in the world by the depth of their foot, so a crab walking below one passes in front of
+  // it; after dark they go on top, over the night, so the gold one still shines.
+  const signs: string[] = []
+  const signsOnTop = isDark(dl.sky)
+  for (const s of dl.signs) {
+    const p = PLOTS[s.plot]
+    const svg = p ? signSvg(s, { x: p.x, y: p.y, w: PLOT_W, h: PLOT_H }) : s.plot === PROJECT_PLOT ? projectSignSvg(s.text) : ''
+    if (!svg) continue
+    signs.push(svg)
+    if (!signsOnTop) items.push({ y: p ? p.y + PLOT_H + 10 : (projectSign(s.text)?.y ?? 0) + 11, svg })
+  }
 
   // Actors: the farm's own stand still while Claude asks; the wall clock's carry on.
   const tops: string[] = []
@@ -205,7 +226,10 @@ const build = (dl: DrawList, lod: number, narrow: boolean): string => {
     const parts = actorParts(a, dl.now, dl.ft, motion, use, freeze)
     if (parts.css) css.push(parts.css)
     const p = presentOf(a, dl.now, dl.ft, freeze ? 'full' : motion)
-    items.push({ y: p.pt.y, svg: parts.svg })
+    // A walker on an errand is drawn at the depth of where it is going: the order is fixed when the picture is made,
+    // and the errand's spot is where it spends its time (a crab posting a letter stands in front of the mailbox).
+    const depth = parts.moves && !a.loop ? stillState(a, actorTime(a, dl.now, dl.ft)).pt.y : p.pt.y
+    items.push({ y: depth, svg: parts.svg })
     if (a.bubble) tops.push(bubbleSvg(a, dl.now, dl.ft, motion, use, parts.moves, freeze))
   })
   items.sort((p, q) => p.y - q.y)
@@ -232,12 +256,8 @@ const build = (dl: DrawList, lod: number, narrow: boolean): string => {
       `<g class="ff ff${k}"${isLive && !isCalm ? '' : ' opacity=".7"'}><circle cx="${x * HD}" cy="${y * HD}" r="${2.5 * HD}" fill="#e9ff8a" opacity=".22"/>${box(x - 0.5, y - 0.5, 1, 1, '#f4ffb0')}</g>`).join(''))
   }
 
-  // On top: signs, helpers beyond those drawn, effects, bubbles, the board.
-  const ui: string[] = []
-  for (const s of dl.signs) {
-    const p = PLOTS[s.plot]
-    if (p) ui.push(signSvg(s, { x: p.x, y: p.y, w: PLOT_W, h: PLOT_H }))
-  }
+  // On top: the signs after dark, helpers beyond those drawn, effects, bubbles, the board.
+  const ui: string[] = signsOnTop ? [...signs] : []
   for (const [plot, n] of d.extra) {
     const p = PLOTS[plot]
     if (p) ui.push(textUse(p.x + 3 + (lod >= 4 ? 1 : 3) * 9 + 1, p.y - 6, `+${n}`, '#fff4d6', '#1c1a24'))
@@ -249,7 +269,7 @@ const build = (dl: DrawList, lod: number, narrow: boolean): string => {
 
   // Only the glyphs and symbols this picture uses.
   const glyphs = new Set<string>()
-  for (const m of top.matchAll(/href="#(g[^"]+)"/g)) glyphs.add(m[1] as string)
+  for (const m of (top + signs.join('')).matchAll(/href="#(g[^"]+)"/g)) glyphs.add(m[1] as string)
   const glyphPaths = glyphDefs(Object.keys(GLYPHS).filter(ch => glyphs.has(glyphId(ch))).join(''))
   const symbols = [...used].map(([id, s]) => {
     const r = SYMBOLS[id]

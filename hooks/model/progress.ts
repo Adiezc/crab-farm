@@ -370,13 +370,20 @@ const genOfKey = (key: string, sid: string): number | undefined => {
  * unfolded, written within a day and carried on by `earn`; otherwise a new generation starts, so a folded ledger is never
  * written again (its coins would be lost) and a restarted session never writes less than it had (they would be lowered).
  */
-export const writeLedger = (mine: Ledger[], folded: readonly string[], sid: string, earn: Totals, now: Ms, isClosed = false): Ledger | undefined => {
+export const writeLedger = (mine: Ledger[], folded: readonly string[], sid: string, earn: Totals, now: Ms, isClosed = false, isFresh = false): Ledger | undefined => {
   const cur = latestLedger(mine)
   const gens = [...mine.map(l => l.gen ?? 0), ...folded.map(k => genOfKey(k, sid)).filter((g): g is number => g !== undefined)]
   const top = gens.length ? Math.max(...gens) : undefined
   const day = (earn as Partial<Earn>).day
   const active = ((earn as Partial<Earn>).callsToday ?? 0) + ((earn as Partial<Earn>).harvestsToday ?? 0) > 0
   const withDay = (days: string[]): string[] => (active && day && !days.includes(day) ? [...days, day] : days)
+  // Earnings that began at zero in this process (a resumed session): the stored ledgers hold none of them, so a new
+  // generation carries all of them, whatever the earlier ones say.
+  if (isFresh) {
+    if (isZero(earn)) return undefined
+    const gen = top === undefined ? 0 : Math.max(top + 1, now)
+    return { v: 2, sid, at: now, totals: totalsOf(earn), days: withDay([]), ...(gen ? { gen, from: emptyTotals() } : {}), ...(isClosed ? { closedAt: now } : {}) }
+  }
   if (cur && (cur.gen ?? 0) === top && cur.closedAt === undefined && !folded.includes(ledgerKey(cur))
     && now - cur.at < LEDGER_FRESH && carriesOn(earn, uptoOf(cur))) {
     const totals = maxTotals(subTotals(earn, cur.from ?? emptyTotals()), cur.totals)

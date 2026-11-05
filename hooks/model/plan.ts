@@ -18,11 +18,13 @@ export const MAX_CALLS = 999
 
 export const emptyPlan = (): Plan => ({ source: 'prompt', rev: 0, steps: [], seats: Array.from({ length: SEATS }, () => null) })
 
-// A plan of one step is named after the first words of the prompt, never the app's reminders.
+// A plan of one step is named after the first words of the prompt, never the app's reminders. Dots, slashes,
+// underscores and colons stay inside a word (README.md, src/app, 2.0) and go at its ends, like other punctuation.
 export const taskName = (text: string, n: number): string =>
   text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, ' ')
-    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+    .replace(/[^\p{L}\p{N}\s'._/:-]/gu, ' ')
+    .replace(/(^|\s)[._/:]+|[._/:]+(?=\s|$)/g, '$1 ')
     .trim()
     .split(/\s+/)
     .filter(Boolean)
@@ -48,6 +50,8 @@ const items = (list: unknown[], nameKey: string): PlanItem[] =>
 
 /** What a tool call (and, after it runs, its result) says about the plan. The Task tools speak only through results. */
 export function toEvents(tool: string, args: Record<string, unknown>, result?: unknown): PlanEvent[] {
+  if (typeof tool !== 'string') return []
+  args = rec(args)
   const r = rec(result)
   if (isPlanTool(tool)) {
     if (result !== undefined) return []

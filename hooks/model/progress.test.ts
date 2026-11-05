@@ -191,6 +191,20 @@ test('a session coming back to a folded ledger starts a new one and never loses 
   expect(writeLedger([first], [], 's', coins(30), T0 + HOUR)).toBeUndefined()
 })
 
+test('a session resumed in a new process counts all it earns there, folded and swept ledgers or not', async () => {
+  // Its old ledger is gone from the store, only its key folded: the new one holds every coin of this run.
+  const swept = writeLedger([], ['led:s'], 's', coins(12), T0 + DAY, false, true)
+  expect(swept?.totals.coins).toBe(12)
+  expect(swept && uptoOf(swept).coins).toBe(12)
+  // Its old ledger still stored and closed, earnings that happen to exceed it are still all new.
+  const old = { ...writeLedger([], [], 's', coins(10), T0)!, closedAt: T0 }
+  const more = writeLedger([old], [], 's', coins(25), T0 + DAY, false, true)
+  expect(more?.totals.coins).toBe(25)
+  expect(lifetimeOf(migrate(0, 1, T0), [old, ...(more ? [more] : [])], {}, emptyTotals()).coins).toBe(35)
+  // Nothing earned yet: nothing written.
+  expect(writeLedger([old], [], 's', coins(0), T0 + DAY, false, true)).toBeUndefined()
+})
+
 // ---- the fold under racing sessions, with the store as a shared map ----
 
 type Sim = {

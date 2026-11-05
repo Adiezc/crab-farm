@@ -11,7 +11,8 @@ import { earnCall, earnHarvest, earnHelper, emptyEarn } from './progress'
 import { classify } from './tools'
 
 export type FarmEvent =
-  | { kind: 'turnStart'; text: string; turnId: string }
+  /** A main-loop turn starting. `model`, when known, is the model driving it: the working crab's hat band. */
+  | { kind: 'turnStart'; text: string; turnId: string; model?: string }
   | { kind: 'turnEnd'; reason: Live['turn']['outcome'] }
   /** A tool call about to run. `agentId` is set for a subagent's call; only its Task tools count (their list is shared). */
   | { kind: 'call'; tool: string; args: Record<string, unknown>; useId: string; isReadOnly?: boolean; agentId?: string }
@@ -24,6 +25,8 @@ export type FarmEvent =
   | { kind: 'agentEnd'; agentId: string; reason: string }
   | { kind: 'compact' }
   | { kind: 'clear' }
+  /** What the farm knows of its session: the project's folder name for the sign, the main loop's model for the hat. */
+  | { kind: 'meta'; project?: string; model?: string }
 
 export type WorldCtx = { owned: number; route: RouteFn; resolve: ResolveFn; home: (plot: number) => Pt; yard: Pt }
 
@@ -86,12 +89,26 @@ const settled = (c: Crab, w: W): Crab => {
 }
 const queue = (c: Crab, job: Job, w: W): Crab => settled(enqueue(c, job, w.ft, w.ctx.home(c.plot), w.ctx.route), w)
 
-const modelOf = (model: string): Model => {
+/** A model's family from an alias or a full id ('claude-haiku-5-5' → haiku); anything unknown is opus. */
+export const modelOf = (model: string): Model => {
   const m = model.toLowerCase()
   return m.includes('haiku') ? 'haiku' : m.includes('sonnet') ? 'sonnet' : m.includes('fable') ? 'fable' : 'opus'
 }
-const rec = (v: unknown): Record<string, unknown> => (v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {})
+const rec = (v: unknown): Record<string, unknown> => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {})
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+/** Events as the engine may really send them (a tool with no input, a prompt with no text): nothing odd throws. */
+const tidy = (ev: FarmEvent): FarmEvent => {
+  switch (ev.kind) {
+    case 'call': return { ...ev, tool: str(ev.tool), args: rec(ev.args) }
+    case 'result': return ev.args === undefined ? { ...ev, tool: str(ev.tool) } : { ...ev, tool: str(ev.tool), args: rec(ev.args) }
+    case 'turnStart': return { ...ev, text: str(ev.text), turnId: str(ev.turnId) }
+    case 'spawn': return { ...ev, model: str(ev.model), label: str(ev.label) }
+    case 'ask': return { ...ev, tool: str(ev.tool) }
+    default: return ev
+  }
+}
 
 /** Coins earned since the board last moved ride on this effect; the board credits them as it lands. */
 const coinsFx = (l: Live, w: W, at: Pt, t0: Ft): Live => {
@@ -103,33 +120,40 @@ const coinsFx = (l: Live, w: W, at: Pt, t0: Ft): Live => {
 
 // ---- the plan, its seats and its crabs ----
 
+/** A crab that lost its plot this reduction, by plot and step: it leaves once any harvest of its own is queued. */
+const departKey = (c: Crab): string => `${c.plot}:${c.stepId}`
+
 /**
- * Every seated step gets its crab and every crab without a seat leaves. A crab whose prompt step was absorbed by a
- * list, or the farmhand, hands over to the step now on its plot and keeps standing (spec 8.3, 8.4). A step dropped
- * before it finished is composted first. New crabs walk out of the barn, 4 beats apart.
+ * Every seated step gets its crab and every crab without a seat is marked to leave (`depart` sends it, after
+ * `harvests`, so a finished step evicted at once still picks its row). A crab hands over to the step now on its plot
+ * and keeps standing when that step is its own carried on: the prompt step absorbed by a list, the farmhand's first
+ * step, or a step another source names again (spec 8.3, 8.4). New crabs walk out of the barn, 4 beats apart.
  */
-const reseat = (l: Live, old: Plan, w: W): { live: Live; renamed: Map<string, string> } => {
+const reseat = (l: Live, old: Plan, w: W): { live: Live; renamed: Map<string, string>; departing: Set<string> } => {
   const { plan } = l
   const ids = new Set(plan.steps.map(s => s.id))
+  const oldIds = new Set(old.steps.map(s => s.id))
   const renamed = new Map<string, string>()
+  const departing = new Set<string>()
   const kept = new Set<string>()
-  for (const c of l.crabs) if (!isLeaving(c) && plan.seats[c.plot] === c.stepId) kept.add(c.stepId)
+  // The farmhand keeps an empty farm.
+  const isKept = (c: Crab): boolean => plan.seats[c.plot] === c.stepId || c.stepId === RESIDENT && plan.steps.length === 0
+  for (const c of l.crabs) if (!isLeaving(c) && isKept(c)) kept.add(c.stepId)
   let changed = false
   const crabs = l.crabs.map(c => {
-    if (isLeaving(c) || plan.seats[c.plot] === c.stepId) return c
+    if (isLeaving(c) || isKept(c)) return c
     changed = true
     const seat = plan.seats[c.plot]
-    const canHandOver = !ids.has(c.stepId) && (c.stepId === RESIDENT || c.stepId.startsWith('p:'))
+    const now = plan.steps.find(s => s.id === seat)
+    const isCarried = now !== undefined && !oldIds.has(now.id) && old.steps.some(s => s.id === c.stepId && s.name === now.name)
+    const canHandOver = !ids.has(c.stepId) && (c.stepId === RESIDENT || c.stepId.startsWith('p:') || isCarried)
     if (canHandOver && seat !== null && seat !== undefined && !kept.has(seat)) {
       kept.add(seat)
       renamed.set(c.stepId, seat)
       return { ...c, stepId: seat }
     }
-    let x = c
-    const was = old.steps.find(s => s.id === c.stepId)
-    if (was && was.status !== 'completed' && !ids.has(c.stepId)) x = queue(x, chore(w, 'compost', c.plot, w.ft), w)
-    x = queue(x, chore(w, 'leave', c.plot, w.ft, BARN_IN), w)
-    return { ...x, leavingAt: w.ft }
+    departing.add(departKey(c))
+    return c
   })
   let k = 0
   const arrive = (stepId: string, plot: number): void => {
@@ -139,8 +163,23 @@ const reseat = (l: Live, old: Plan, w: W): { live: Live; renamed: Map<string, st
     changed = true
   }
   plan.seats.forEach((id, plot) => { if (id !== null && !kept.has(id)) arrive(id, plot) })
-  if (plan.steps.length === 0 && !crabs.some(c => !isLeaving(c))) arrive(RESIDENT, 0)
-  return { live: changed ? { ...l, crabs } : l, renamed }
+  if (plan.steps.length === 0 && !crabs.some(c => !isLeaving(c) && !departing.has(departKey(c)))) arrive(RESIDENT, 0)
+  return { live: changed ? { ...l, crabs } : l, renamed, departing }
+}
+
+/** The crabs marked to leave walk into the barn, after any harvest of theirs; a step dropped unfinished is composted first. */
+const depart = (l: Live, old: Plan, departing: Set<string>, w: W): Live => {
+  if (departing.size === 0) return l
+  const ids = new Set(l.plan.steps.map(s => s.id))
+  const crabs = l.crabs.map(c => {
+    if (isLeaving(c) || !departing.has(departKey(c))) return c
+    let x = c
+    const was = old.steps.find(s => s.id === c.stepId)
+    if (was && was.status !== 'completed' && !ids.has(c.stepId)) x = queue(x, chore(w, 'compost', c.plot, w.ft), w)
+    x = queue(x, chore(w, 'leave', c.plot, w.ft, BARN_IN), w)
+    return { ...x, leavingAt: w.ft }
+  })
+  return { ...l, crabs }
 }
 
 /** Running helpers stay with their step; when it leaves the plots they go where a new helper would. */
@@ -200,12 +239,12 @@ const harvests = (l: Live, old: Plan, w: W): Live => {
   return out
 }
 
-/** The plan moved: crabs re-seated, helpers re-homed, finished steps harvested. */
+/** The plan moved: crabs re-seated, helpers re-homed, finished steps harvested, crabs without a plot sent off. */
 const withPlan = (l: Live, plan: Plan, w: W): Live => {
   if (plan === l.plan) return l
   const old = l.plan
   const seated = reseat({ ...l, plan }, old, w)
-  return harvests(rehome(seated.live, seated.renamed), old, w)
+  return depart(harvests(rehome(seated.live, seated.renamed), old, w), old, seated.departing, w)
 }
 
 const planEvents = (l: Live, evs: PlanEvent[], w: W): Live => {
@@ -226,29 +265,47 @@ const unfreeze = (l: Live, now: Ms): Live => {
 
 // ---- events ----
 
-const turnStart = (l: Live, ev: Extract<FarmEvent, { kind: 'turnStart' }>, w: W): Live => {
-  const turn: Live['turn'] = { isWorking: true, id: ev.turnId, text: ev.text, startedAt: w.now, hadTools: false }
-  const next = { ...l, turn }
+/**
+ * A turn is over (or a new one began without its end ever arriving): any ask is answered, whatever it left running
+ * ends now, and a helper with no id leaves with it, empty-handed. Nothing stays frozen or holding into the next turn.
+ */
+const windUp = (l0: Live, w: W, ok: boolean): Live => {
+  const l = unfreeze(l0, w.now)
+  w.ft = farmTime(l, w.now)
+  let changed = l !== l0
+  const crabs = l.crabs.map(c => {
+    let x = c
+    for (const j of c.jobs) if (j.isOpen && j.until === undefined) x = close(x, j.n, w.ft, ok)
+    if (x === c) return c
+    changed = true
+    return settled(x, w)
+  })
+  const helpers = l.helpers.map(h => {
+    if (h.agentId !== undefined || h.endedAt !== undefined) return h
+    changed = true
+    return { ...h, endedAt: w.ft }
+  })
+  return changed ? { ...l, crabs, helpers } : l0
+}
+
+const turnStart = (l0: Live, ev: Extract<FarmEvent, { kind: 'turnStart' }>, w: W): Live => {
+  // The turn under way announced again (a reload replays it) is nothing new: its errands keep running.
+  if (ev.turnId && l0.turn.isWorking && l0.turn.id === ev.turnId) return ev.model ? meta(l0, { kind: 'meta', model: ev.model }) : l0
+  const l = windUp(l0, w, true)
+  // Only the prompt's start is kept: nothing draws more, and a pasted log would ride along on every write.
+  const turn: Live['turn'] = { isWorking: true, id: ev.turnId, text: ev.text.slice(0, 200), startedAt: w.now, hadTools: false }
+  const next: Live = ev.model ? { ...l, turn, model: modelOf(ev.model) } : { ...l, turn }
   // With no list, one already done, or one made from the last prompt, the prompt is a plan of one step (spec 8.4).
   return withPlan(next, reducePlan(l.plan, { kind: 'prompt', name: taskName(ev.text, l.tasks + 1), turnId: ev.turnId }, w.now), w)
 }
 
 const turnEnd = (l0: Live, ev: Extract<FarmEvent, { kind: 'turnEnd' }>, w: W): Live => {
-  if (!l0.turn.isWorking && l0.turn.outcome === ev.reason) return l0
-  let l = unfreeze(l0, w.now)
-  w.ft = farmTime(l, w.now)
-  const ok = ev.reason === 'answer' || ev.reason === 'refusal'
+  // Even a second end (or one with no turn) closes whatever is still open: reduce gives back the same farm if nothing was.
+  let l = windUp(l0, w, ev.reason === 'answer' || ev.reason === 'refusal')
   const turn: Live['turn'] = { ...l.turn, isWorking: false }
   if (ev.reason) turn.outcome = ev.reason
   else delete turn.outcome
-  // Whatever was still running is over; a helper with no id leaves with its turn, empty-handed.
-  const crabs = l.crabs.map(c => {
-    let x = c
-    for (const j of c.jobs) if (j.isOpen && j.until === undefined) x = close(x, j.n, w.ft, ok)
-    return x === c ? c : settled(x, w)
-  })
-  const helpers = l.helpers.map(h => (h.agentId === undefined && h.endedAt === undefined ? { ...h, endedAt: w.ft } : h))
-  l = { ...l, turn, crabs, helpers }
+  l = { ...l, turn }
   // A prompt's step is brought in when its turn answered after doing some work.
   if (ev.reason === 'answer' && l0.turn.hadTools && l.plan.source === 'prompt') l = planEvents(l, [{ kind: 'finish' }], w)
   return l
@@ -258,12 +315,12 @@ const PLAN_SCOPES = new Set(['first_task', 'new_task'])
 const isTaskTool = (tool: string): boolean => tool === 'TaskCreate' || tool === 'TaskUpdate' || tool === 'TaskList'
 
 const call = (l0: Live, ev: Extract<FarmEvent, { kind: 'call' }>, w: W): Live => {
-  // A subagent's calls are its own business; its Task tools speak through their results.
-  if (ev.agentId !== undefined) return l0
+  // A subagent's calls are its own business; its Task tools speak through their results. A call with no tool is nothing.
+  if (ev.agentId !== undefined || !ev.tool) return l0
   // The call's own coin first, so a step it finishes carries it to the yard.
   let l: Live = { ...l0, earn: earnCall(l0.earn, w.now), turn: l0.turn.hadTools ? l0.turn : { ...l0.turn, hadTools: true } }
   l = planEvents(l, toEvents(ev.tool, ev.args), w)
-  if (ev.tool.endsWith('__update_plan') && typeof ev.args.scope === 'string' && PLAN_SCOPES.has(ev.args.scope)) l = { ...l, tasks: l.tasks + 1 }
+  if (ev.tool.includes('ccd_turn') && ev.tool.endsWith('__update_plan') && typeof ev.args.scope === 'string' && PLAN_SCOPES.has(ev.args.scope)) l = { ...l, tasks: l.tasks + 1 }
   // It counts toward the step it is made for, once the plan has moved.
   const target = workStep(l.plan)
   l = { ...l, plan: countCall(l.plan, target?.id, w.now) }
@@ -311,8 +368,10 @@ const crates = (l: Live, ev: Extract<FarmEvent, { kind: 'result' }>): Live => {
 }
 
 const result = (l0: Live, ev: Extract<FarmEvent, { kind: 'result' }>, w: W): Live => {
-  // Once the call has run, whatever it asked the person has been answered.
-  let l = unfreeze(l0, w.now)
+  // Once the call that asked has run, the person has answered. Another call returning meanwhile (a Read run in
+  // parallel, a subagent's) leaves the farm frozen: the question is still on screen.
+  const isAnswer = !l0.asking || ev.agentId === undefined && (l0.asking.tool === ev.tool || l0.asking.tool === '')
+  let l = isAnswer ? unfreeze(l0, w.now) : l0
   w.ft = farmTime(l, w.now)
   if (ev.agentId !== undefined && !isTaskTool(ev.tool)) return l
   if (!ev.isError) l = planEvents(l, toEvents(ev.tool, ev.args ?? {}, ev.result ?? null), w)
@@ -322,9 +381,12 @@ const result = (l0: Live, ev: Extract<FarmEvent, { kind: 'result' }>, w: W): Liv
 }
 
 const spawn = (l: Live, ev: Extract<FarmEvent, { kind: 'spawn' }>, w: W): Live => {
+  // The working step's plot; when that step has none in view (every step done, more than six), the first plot in use.
   const target = workStep(l.plan)
-  const stepId = target?.id ?? RESIDENT
-  const plot = Math.max(0, target ? l.plan.seats.indexOf(target.id) : 0)
+  const seat = target ? l.plan.seats.indexOf(target.id) : -1
+  const first = l.plan.seats.findIndex(id => id !== null)
+  const plot = seat >= 0 ? seat : Math.max(0, first)
+  const stepId = (seat >= 0 ? target?.id : l.plan.seats[first]) ?? RESIDENT
   const id = ev.useId ?? ev.agentId ?? `h${take(w)}`
   const others = l.helpers.filter(h => h.id !== id)
   const taken = new Set(others.filter(h => h.endedAt === undefined && h.stepId === stepId).map(h => h.slot))
@@ -361,12 +423,38 @@ const compact = (l: Live, w: W): Live => {
   const target = workStep(l.plan)
   const ci = l.crabs.findIndex(c => !isLeaving(c) && c.stepId === (target?.id ?? RESIDENT))
   const crab = l.crabs[ci]
+  // One barrow at a time: a crab held by a long act doesn't pile up chores, however often the context compacts.
   if (!crab) return l
+  const ends = spansOf(crab, w.ctx.home(crab.plot), w.ctx.route).map(s => s.end)
+  if (crab.jobs.some((j, i) => j.kind === 'compost' && (ends[i] ?? Infinity) > w.ft)) return l
   const job = chore(w, 'compost', crab.plot, w.ft)
   const c = queue(crab, job, w)
   const lands = spansOf(c, w.ctx.home(c.plot), w.ctx.route)[c.jobs.findIndex(j => j.n === job.n)]?.arrive
   const fx: Fx = { n: take(w), kind: 'compost', at: { ...job.to }, t0: lands !== undefined && lands !== Infinity ? lands : ceilBeat(w.ft) }
   return { ...l, crabs: l.crabs.map((x, i) => (i === ci ? c : x)), fx: [...l.fx, fx] }
+}
+
+/** The project's name and the main loop's model, carried from one farm to another (a clear starts a new farm). */
+const withMeta = (l: Live, from: Live): Live => {
+  const out: Live = { ...l }
+  if (from.project !== undefined) out.project = from.project
+  if (from.model !== undefined) out.model = from.model
+  return out
+}
+
+/** The sign's project name (blank clears it) and the hat's model. Same reference when they are as they were. */
+const meta = (l: Live, ev: Extract<FarmEvent, { kind: 'meta' }>): Live => {
+  let out = l
+  if (typeof ev.project === 'string') {
+    const project = ev.project.trim()
+    if (project && project !== l.project) out = { ...out, project }
+    if (!project && l.project !== undefined) { const { project: _, ...rest } = out; out = rest }
+  }
+  if (typeof ev.model === 'string' && ev.model.trim()) {
+    const model = modelOf(ev.model)
+    if (model !== l.model) out = { ...out, model }
+  }
+  return out
 }
 
 // ---- tidying, piggybacked on a change ----
@@ -398,7 +486,9 @@ const same = (a: unknown, b: unknown): boolean => {
  * One event applied to the farm (spec 3.2). The same reference when nothing changes; otherwise `rev` moves on.
  * `ctx.owned` is how many builds stand, so jobs go to the nearest landmark that exists when they are queued.
  */
-export function reduce(live: Live, ev: FarmEvent, now: Ms, ctx: WorldCtx): Live {
+export function reduce(live: Live, ev0: FarmEvent, now: Ms, ctx: WorldCtx): Live {
+  if (ev0 === null || typeof ev0 !== 'object' || !Number.isFinite(now)) return live
+  const ev = tidy(ev0)
   const w: W = { now, ft: farmTime(live, now), ctx, seq: live.seq }
   let next: Live
   switch (ev.kind) {
@@ -413,7 +503,9 @@ export function reduce(live: Live, ev: FarmEvent, now: Ms, ctx: WorldCtx): Live 
     case 'spawn': next = spawn(live, ev, w); break
     case 'agentEnd': next = agentEnd(live, ev, w); break
     case 'compact': next = compact(live, w); break
-    case 'clear': next = emptyLive(now, ctx.home(0)); break
+    case 'clear': next = { ...withMeta(emptyLive(now, ctx.home(0)), live), seq: Math.max(1, live.seq) }; break
+    case 'meta': next = meta(live, ev); break
+    default: next = live
   }
   if (next === live) return live
   if (w.seq !== live.seq) next = { ...next, seq: w.seq }

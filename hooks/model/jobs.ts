@@ -196,7 +196,8 @@ export function enqueue(crab: Crab, job: Job, ft: Ft, home: Pt, route: RouteFn):
   let c: Crab = crab
   if (drop > 0) c = { ...crab, anchor: { ft: (before.spans[drop - 1] as Span).end, pt: (crab.jobs[drop - 1] as Job).to }, jobs: crab.jobs.slice(drop) }
   // 3. Cut the walk home (done first so every later rule sees where the crab really starts).
-  if (c.jobs.length === 0) c = { ...c, anchor: { ft: T, pt: at(before.legs, ft).pt } }
+  // A crab with no legs at all (one already on its way out, its queue spent) starts from its anchor.
+  if (c.jobs.length === 0) c = { ...c, anchor: { ft: T, pt: before.legs.length > 0 ? at(before.legs, ft).pt : c.anchor.pt } }
   const next: Job = { ...job, t0: Math.max(ceilBeat(job.t0), T) }
   const grown: Crab = { ...c, jobs: [...c.jobs, next] }
   if (CHORES.has(job.kind)) return grown

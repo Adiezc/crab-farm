@@ -5,23 +5,25 @@
 
 import { BEAT, SPRITE_SIZES } from '../contracts'
 import type { Actor, Board, DrawList, IconId, Pose, Prop, Pt, Season, Sign, SkyStep, SpriteId, Static, TermLayer } from '../contracts'
-import type { Fx } from '../../types'
+import type { Fx, Model } from '../../types'
 import { HAT_DY } from '../art'
-import { TERM_PALETTE, termLayer, termSprite } from '../art_term'
+import { TERM_BANDS, TERM_PALETTE, termLayer, termSprite } from '../art_term'
 import { at } from '../model/jobs'
 import { PLOTS, PLOT_H } from '../model/layout'
-import { actorTime, stillState } from './anim'
+import { actorTime, modelOfHue, stillState } from './anim'
 import type { TermCamera } from './camera'
-import { SIGN_TEXT_W, WOOD, boardBox, fontText, textWidth } from './text'
+import { PROJECT_PLOT, SIGN_TEXT_W, WOOD, boardBox, fontText, projectSign, textWidth } from './text'
 
 /** The terminal art a frame is drawn from: art_term.ts in the plugin, small fixtures in tests. */
 export type TermArt = {
   palette: readonly number[]
   layer: (layer: 'bg' | 'fg', s: 2 | 3 | 4) => TermLayer
   sprite: (id: SpriteId, s: 2 | 3 | 4) => TermLayer | undefined
+  /** The straw hat's band indices and each model's, light, mid, dark: the driven crab's hat wears its model's. */
+  bands?: Readonly<Record<'hat' | Model, readonly [number, number, number]>>
 }
 
-const ART: TermArt = { palette: TERM_PALETTE, layer: termLayer, sprite: termSprite }
+const ART: TermArt = { palette: TERM_PALETTE, layer: termLayer, sprite: termSprite, bands: TERM_BANDS }
 const CLEAR = 255
 const HALF_BLOCK = 0x2580
 
@@ -65,11 +67,12 @@ export function tint(rgb: number, sky: SkyStep, season: Season): number {
     r = r * 1.06 + 4
     b = b * 0.9
   } else if (season === 'autumn' && isLeafy) {
-    const nr = g * 1.05 + 20
-    const ng = (r + g) * 0.42
+    // The SVG's autumn matrix: the green goes olive and ochre, never russet, so the orange crabs still stand out.
+    const nr = 1.06 * r + 0.04 * g + 5
+    const ng = 0.02 * r + 0.93 * g
     r = nr
     g = ng
-    b = b * 0.7
+    b = b * 0.9
   } else if (season === 'winter') {
     // Snow on the leaves and the grass, and a little grey everywhere else.
     const k = isLeafy ? 0.6 : 0.15
@@ -314,15 +317,20 @@ function staticItem(items: Item[], st: Static, art: TermArt, s: 2 | 3 | 4): void
   items.push({ y: fy, draw: (cv) => stamp(cv, l, feetLeft(cv, l, fx), feetTop(cv, l, fy), st.flip === true, ghost, cut) })
 }
 
-/** A plot's sign: a plank under the plot, gold for the step in progress, its words as darker strokes. */
-function signItem(items: Item[], sign: Sign): void {
+/** Where a sign's plank is in world px and the words on it: under its plot, or the project's by the gate. */
+const signBox = (sign: Sign): { x: number; y: number; w: number; text: string } | undefined => {
+  if (sign.plot === PROJECT_PLOT) return projectSign(sign.text)
   const plot = PLOTS[sign.plot]
-  if (!plot) return
+  if (!plot) return undefined
   const text = fontText(sign.text)
-  if (!text.trim()) return
-  const x = plot.x
-  const y = plot.y + PLOT_H + 2
-  const w = Math.min(textWidth(text), SIGN_TEXT_W) + 5
+  return { x: plot.x, y: plot.y + PLOT_H + 2, w: Math.min(textWidth(text), SIGN_TEXT_W) + 5, text }
+}
+
+/** A sign: a plank under its plot, gold for the step in progress, or the project's by the gate; words as strokes. */
+function signItem(items: Item[], sign: Sign): void {
+  const box = signBox(sign)
+  if (!box || !box.text.trim()) return
+  const { x, y, w, text } = box
   const h = 8
   items.push({
     y: y + h,
@@ -395,7 +403,7 @@ const PROP_AT: Readonly<Record<Prop, { dx: number; dy: number; turns: boolean }>
   magnifier: { dx: 5, dy: -7, turns: true }, sack: { dx: -3, dy: -16, turns: false }, crate: { dx: -3, dy: -16, turns: false },
   letter: { dx: 4, dy: -5, turns: true }, basket: { dx: -3, dy: -16, turns: false }, book: { dx: 3, dy: -6, turns: true },
   hammer: { dx: 5, dy: -6, turns: true }, lantern: { dx: 6, dy: -4, turns: true }, rod: { dx: 4, dy: -8, turns: true },
-  crank: { dx: 5, dy: -2, turns: true }, umbrella: { dx: -6, dy: -18, turns: false },
+  crank: { dx: 5, dy: -2, turns: true }, umbrella: { dx: -6, dy: -16, turns: false },
 }
 const PROP_B: Partial<Record<Prop, SpriteId>> = { hoe: 'prop_hoe_2', can: 'prop_can_2', hammer: 'prop_hammer_2' }
 
@@ -405,6 +413,29 @@ const markerOf = (a: Actor): number | undefined => {
   const icon: IconId | undefined = a.bubble
   if (!icon) return undefined
   return icon === 'alert' ? OWN.red : icon === 'ask' ? OWN.amber : icon === 'zzz' ? OWN.sleep : icon === 'heart' ? OWN.heart : OWN.white
+}
+
+// Gold on straw would vanish: opus's band on the straw hat is its mid gold between two of its shadow, as in the SVG.
+const STRAW_OPUS = [0x6b4a07, 0xd2a21d, 0x6b4a07] as const
+const banded = new WeakMap<TermLayer, Map<Model, TermLayer>>()
+/** A hat with its band in the model's colours, when the art says where the band is. */
+const bandedOf = (art: TermArt, hat: SpriteId, l: TermLayer, model: Model): TermLayer => {
+  const from = art.bands?.hat
+  let to: readonly number[] | undefined = art.bands?.[model]
+  if (model === 'opus' && hat === 'hat_straw') {
+    const own = STRAW_OPUS.map((c) => art.palette.indexOf(c))
+    if (own.every((i) => i >= 0)) to = own
+  }
+  if (!from || !to) return l
+  let m = banded.get(l)
+  if (!m) { m = new Map(); banded.set(l, m) }
+  let out = m.get(model)
+  if (!out) {
+    const swap = to
+    out = { w: l.w, h: l.h, px: l.px.map((v) => { const i = from.indexOf(v); return i < 0 ? v : swap[i] ?? v }) }
+    m.set(model, out)
+  }
+  return out
 }
 
 // A sprite's first and last rows with anything drawn, so a hat lands on a head however the art pads its sprites.
@@ -479,7 +510,9 @@ function actorItem(items: Item[], markers: Marker[], a: Actor, dl: DrawList, art
   const isB = isLive && Math.floor(dl.now / every) % 2 === 1
   const body = spriteOf(art, isB ? pair[1] : pair[0], s)
   const flip = face === -1
-  const hat = a.hat && a.kind === 'crab' ? spriteOf(art, a.hat, s) : undefined
+  const plain = a.hat && a.kind === 'crab' ? spriteOf(art, a.hat, s) : undefined
+  // The crab the model drives wears its colour on its hat band, as in the SVG.
+  const hat = plain && a.hat && a.hue !== undefined ? bandedOf(art, a.hat, plain, modelOfHue(a.hue)) : plain
   const propId = prop ? (isB && PROP_B[prop]) || (`prop_${prop}` as SpriteId) : undefined
   const propL = propId ? spriteOf(art, propId, s) : undefined
   const colour = markerOf(a)
@@ -571,6 +604,9 @@ const row = (dl: DrawList, label: string): string | undefined =>
 /** The next build's name from its sprite: `well_pump` → WELL PUMP, `scaffold_2` → SCAFFOLD. */
 const buildName = (id: string): string => id.replace(/_\d+$/, '').replace(/_/g, ' ').toUpperCase()
 
+/** A name as the cards spell it in capitals, back in its own case: CAP'N CLAW → Cap'n Claw. */
+const titleCase = (s: string): string => s.toLowerCase().replace(/(^|\s)([a-z])/g, (_m, sp: string, c: string) => sp + c.toUpperCase())
+
 /** The state word every surface shares. */
 export const stateWord = (dl: DrawList): string =>
   dl.board.isAsking ? '! needs your OK' : dl.board.isWorking ? 'working' : 'your move'
@@ -603,7 +639,9 @@ export function termLines(dl: DrawList, cols: number): string[] {
   const alt = /now "([^"]*)"(?:, ([^;]+))?/.exec(dl.alt)
   const current = dl.signs.find((g) => g.isCurrent)
   const name = alt?.[1] ?? current?.text ?? ''
-  const job = dl.board.isWorking ? (alt?.[2]?.trim() ?? '') : ''
+  // While Claude asks, the state word says so: a job that only says it too keeps just the tool it asks about.
+  const doing = alt?.[2]?.trim() ?? ''
+  const job = !dl.board.isWorking ? '' : /^needs your OK/i.test(doing) ? /\(([^)]+)\)/.exec(doing)?.[1] ?? '' : doing
   const upper = fontText(name)
   const ids = current ? [`p${current.plot}`, `plot${current.plot}`, `plot-${current.plot}`, `sign${current.plot}`] : []
   const zone = dl.zones.find((z) => ids.includes(z.id)) ??
@@ -611,13 +649,28 @@ export function termLines(dl: DrawList, cols: number): string[] {
   const mins = zone?.lines.map((l) => /(\d+) MIN/i.exec(l)?.[1]).find((m) => m !== undefined)
   const helpers = Number(row(dl, 'HELPERS') ?? /(\d+) helpers?/i.exec(dl.alt)?.[1] ?? 0)
   const word = stateWord(dl)
+  // The crab's name, from the first line of its card (PINCHY · 3/6 …), or the farmhand's when there is no plan.
+  const card = zone ?? (dl.signs.some((g) => g.plot >= 0) ? undefined : dl.zones.find((z) => z.id === 'r0'))
+  const crab = titleCase(/^([A-Z][A-Z' ]*?) · /.exec(card?.lines[0] ?? '')?.[1] ?? '')
   const tail = [
     { text: job },
     { text: mins ? `${mins}m` : '' },
     { text: helpers > 0 ? `${helpers} helper${helpers === 1 ? '' : 's'}` : '' },
   ]
-  // The state word always shows; the step's name shrinks before it goes.
-  let status = joinFit([...(name ? [{ text: `▸ ${name}`, keep: true }] : []), ...tail, { text: word, keep: true }], cols)
+  // The state word always shows. The minutes and helpers go first; then a long step name (often the whole prompt)
+  // shrinks to the room the crab's name and its job leave, down to 10 characters; then the crab's name goes.
+  const line = (who: string, step: string): string => {
+    const head = [who, step].filter(Boolean).join(' · ')
+    return joinFit([...(head ? [{ text: `▸ ${head}`, keep: true }] : []), ...tail, { text: word, keep: true }], cols)
+  }
+  const fits = (s: string): boolean => width(s) <= cols && s.endsWith(word) && (!job || s.includes(job))
+  const withWho = (who: string): string | undefined => {
+    const room = cols - width(`▸ ${who ? `${who} · ` : ''}`) - (job ? width(` · ${job}`) : 0) - width(` · ${word}`)
+    if (name && room < Math.min(10, width(name))) return undefined
+    const s = line(who, fit(name, room))
+    return fits(s) ? s : undefined
+  }
+  let status = (crab ? withWho(crab) : undefined) ?? withWho('') ?? line('', name)
   if (width(status) > cols || !status.endsWith(word)) {
     const room = cols - width(word) - 3
     status = room >= 4 && name ? `${fit(`▸ ${name}`, room)} · ${word}` : fit(word, cols)

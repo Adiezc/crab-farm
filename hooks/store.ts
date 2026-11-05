@@ -24,6 +24,17 @@ const DELETE_AFTER = 60_000
 // Module memory is only a cache: a reload loses it, and the store alone is the truth.
 let pending: { keys: string[]; at: Ms } | undefined
 const written = new Map<string, Ledger>()   // this process's last ledger write, by session id
+// Sessions whose earnings in this process began at zero: a resumed session's stored ledgers, folded or not, hold
+// nothing of them. Until this process writes one for it, its new ledger counts everything it earned.
+const zeroStart = new Set<string>()
+
+/** Says this session's earnings in this process start from nothing (a new process, or a /clear or /resume). */
+export function beginsAtZero(sid: string): void {
+  if (!written.has(sid)) zeroStart.add(sid)
+}
+
+/** Whether this process earns for `sid` from zero and has written no ledger for it yet. */
+const isFresh = (sid: string): boolean => zeroStart.has(sid) && !written.has(sid)
 
 type Snap = { farm?: StoreFarm; ledgers: Ledger[]; baskets: Record<string, number>; harvest: unknown }
 
@@ -40,7 +51,7 @@ const isLedger = (v: unknown): v is Ledger =>
   && (v.from === undefined || isTotals(v.from))
 
 /** Everything the farm keeps, read key by key. Values of an unknown shape are left out. */
-const snapshot = async ($: StoreDollar): Promise<Snap> => {
+async function snapshot($: StoreDollar): Promise<Snap> {
   const snap: Snap = { ledgers: [], baskets: {}, harvest: undefined }
   for (const key of await $.store.keys()) {
     if (key === FARM) {
@@ -60,7 +71,7 @@ const snapshot = async ($: StoreDollar): Promise<Snap> => {
 }
 
 /** Reads farm2 again and writes what `make` builds on it, only when that differs. The fold is idempotent, so re-running it on a newer farm merges. */
-const writeFarm = async ($: StoreDollar, make: (stored: StoreFarm | undefined) => StoreFarm): Promise<StoreFarm> => {
+async function writeFarm($: StoreDollar, make: (stored: StoreFarm | undefined) => StoreFarm): Promise<StoreFarm> {
   const raw = await $.store.get(FARM)
   const stored = isFarm(raw) ? raw : undefined
   const next = make(stored)
@@ -83,7 +94,8 @@ const bankFrom = (snap: Snap, farm: StoreFarm, sid: string, now: Ms): Bank => {
   const key = mine ? ledgerKey(mine) : undefined
   const ledgers = [...snap.ledgers.filter(l => ledgerKey(l) !== key), ...(mine && key && !farm.folded.includes(key) ? [mine] : [])]
   const all = lifetimeOf(farm, ledgers, snap.baskets, emptyTotals())
-  const upto = mine ? uptoOf(mine) : emptyTotals()
+  // What this session's live earnings already hold of the stored total: nothing yet, when they began at zero here.
+  const upto = mine && !isFresh(sid) ? uptoOf(mine) : emptyTotals()
   const bank = bankOf(farm, subTotals(all, upto), now, upto)
   const dates = Object.keys(snap.baskets).map(k => k.slice(2)).sort()
   const basketDay = dates[dates.length - 1]
@@ -95,7 +107,7 @@ const withBuilt = (farm: StoreFarm, bank: Bank): StoreFarm =>
   Object.keys(bank.builtAt).some(id => !(id in farm.builtAt)) ? mergeFarm(farm, { ...farm, builtAt: bank.builtAt }) : farm
 
 /** Removes keys folded at an earlier pass that farm2, read again now, still lists as folded. */
-const sweep = async ($: StoreDollar, now: Ms): Promise<void> => {
+async function sweep($: StoreDollar, now: Ms): Promise<void> {
   if (!pending || now - pending.at < DELETE_AFTER) return
   const { keys } = pending
   pending = undefined
@@ -140,7 +152,7 @@ export async function flush($: StoreDollar, sid: string, earn: Earn, now: Ms, is
     if (!folded.includes(ledgerKey(mem))) folded = [...folded, ledgerKey(mem)]
   }
   let ledgers = snap.ledgers
-  const next = writeLedger(mine, folded, sid, earn, now, isClosed)
+  const next = writeLedger(mine, folded, sid, earn, now, isClosed, isFresh(sid))
   if (next) {
     const key = ledgerKey(next)
     const raw = await $.store.get(key)

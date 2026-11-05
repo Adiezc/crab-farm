@@ -377,7 +377,10 @@ test('the sky and the season tint the daylight palette', async () => {
     }
   }
   const leaf = tint(0x5f8f3a, 'day', 'autumn')
-  expect((leaf >> 16) & 255).toBeGreaterThan((leaf >> 8) & 255) // green turns to russet
+  // Green turns olive, as the SVG's autumn matrix turns it: more red, less green, never russet.
+  expect((leaf >> 16) & 255).toBeGreaterThan(0x5f)
+  expect((leaf >> 8) & 255).toBeLessThan(0x8f)
+  expect((leaf >> 8) & 255).toBeGreaterThan((leaf >> 16) & 255)
   const snow = tint(0x5f8f3a, 'day', 'winter')
   expect(lum(snow)).toBeGreaterThan(lum(0x5f8f3a))
 })
