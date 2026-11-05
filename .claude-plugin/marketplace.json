@@ -5,13 +5,13 @@
     "url": "https://github.com/Adiezc"
   },
   "metadata": {
-    "description": "Crab Farm: a tiny pixel farm side pane for Claude Code."
+    "description": "Crab Farm: a living pixel farm beside Claude Code, one named crab per step of Claude's plan."
   },
   "plugins": [
     {
       "name": "crab-farm",
       "source": "./",
-      "description": "A tiny pixel farm in a side pane: each task gets its own Claude, subagents are the helpers. No usage."
+      "description": "A living pixel farm beside Claude Code: one named crab per step, tool calls as errands, subagents as helpers, coins that build the farm. Desktop, VS Code and terminal. No usage."
     }
   ]
 }
